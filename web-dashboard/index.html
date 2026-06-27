@@ -31,6 +31,10 @@
                 <header>
                     <h2>Your Performance</h2>
                     <p>Track your dictation speed and efficiency.</p>
+                    <div style="margin-top: 15px; display: flex; align-items: center; gap: 10px;">
+                        <label for="baseline-wpm" style="color: #9494a0; font-size: 14px;">Baseline Typing Speed (WPM):</label>
+                        <input type="number" id="baseline-wpm" value="40" style="width: 80px; padding: 5px; border-radius: 6px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: white;">
+                    </div>
                 </header>
 
                 <div class="stats-grid">
@@ -124,6 +128,8 @@
     </div>
 
     <!-- Firebase App Logic -->
-    <script type="module" src="app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
+    <script src="app.js"></script>
 </body>
 </html>

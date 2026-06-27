@@ -1,6 +1,3 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
-import { getFirestore, collection, addDoc, getDocs, onSnapshot, query, orderBy, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
-
 // Firebase Configuration from user
 const firebaseConfig = {
   apiKey: "AIzaSyA8XIFoJwrsgV8AL2FnDua4wFjiYQkO7XE",
@@ -12,8 +9,8 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
 
 // --- Navigation Logic ---
 document.querySelectorAll('.nav-links li').forEach(link => {
@@ -118,8 +115,8 @@ function updateMetricsUI() {
     const avgWpm = dataPoints.length > 0 ? Math.round(dataPoints.reduce((a,b)=>a+b,0)/dataPoints.length) : 0;
     document.getElementById('avg-wpm').innerText = avgWpm;
     
-    // Estimate time saved (assuming average typing speed is 40 WPM vs dictation)
-    const timeTypingHrs = (totalWords / 40) / 60;
+    const baselineWPM = parseInt(document.getElementById('baseline-wpm').value) || 40;
+    const timeTypingHrs = (totalWords / baselineWPM) / 60;
     const timeDictatingHrs = totalDuration / 3600;
     const timeSaved = Math.max(0, timeTypingHrs - timeDictatingHrs).toFixed(1);
     document.getElementById('time-saved').innerText = `${timeSaved} hrs`;
@@ -132,8 +129,7 @@ function updateMetricsUI() {
 }
 
 // Fetch Metrics real-time
-const qMetrics = query(collection(db, "metrics"), orderBy("timestamp", "asc"));
-onSnapshot(qMetrics, (snapshot) => {
+db.collection("metrics").orderBy("timestamp", "asc").onSnapshot((snapshot) => {
     wpmData = [];
     snapshot.forEach((doc) => {
         wpmData.push({ id: doc.id, ...doc.data() });
@@ -155,10 +151,10 @@ dictForm.addEventListener('submit', async (e) => {
     
     if (word && replacement) {
         try {
-            await addDoc(collection(db, "dictionary"), {
+            await db.collection("dictionary").add({
                 word: word,
                 replacement: replacement,
-                timestamp: new Date()
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
             wordInput.value = '';
             replaceInput.value = '';
@@ -169,8 +165,7 @@ dictForm.addEventListener('submit', async (e) => {
 });
 
 // Fetch Dictionary real-time
-const qDict = query(collection(db, "dictionary"), orderBy("timestamp", "desc"));
-onSnapshot(qDict, (snapshot) => {
+db.collection("dictionary").orderBy("timestamp", "desc").onSnapshot((snapshot) => {
     dictList.innerHTML = '';
     snapshot.forEach((docSnap) => {
         const data = docSnap.data();
@@ -191,7 +186,7 @@ onSnapshot(qDict, (snapshot) => {
     document.querySelectorAll('.delete-btn').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             const id = e.target.getAttribute('data-id');
-            await deleteDoc(doc(db, "dictionary", id));
+            await db.collection("dictionary").doc(id).delete();
         });
     });
 });
@@ -209,10 +204,10 @@ omniForm.addEventListener('submit', async (e) => {
     
     if (trigger && action) {
         try {
-            await addDoc(collection(db, "omni_commands"), {
+            await db.collection("omni_commands").add({
                 trigger: trigger,
                 action: action,
-                timestamp: new Date()
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
             });
             triggerInput.value = '';
             actionInput.value = '';
@@ -223,8 +218,7 @@ omniForm.addEventListener('submit', async (e) => {
 });
 
 // Fetch Omni Commands real-time
-const qOmni = query(collection(db, "omni_commands"), orderBy("timestamp", "desc"));
-onSnapshot(qOmni, (snapshot) => {
+db.collection("omni_commands").orderBy("timestamp", "desc").onSnapshot((snapshot) => {
     omniList.innerHTML = '';
     snapshot.forEach((docSnap) => {
         const data = docSnap.data();
@@ -245,7 +239,7 @@ onSnapshot(qOmni, (snapshot) => {
     document.querySelectorAll('.omni-delete-btn').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             const id = e.target.getAttribute('data-id');
-            await deleteDoc(doc(db, "omni_commands", id));
+            await db.collection("omni_commands").doc(id).delete();
         });
     });
 });
@@ -253,4 +247,13 @@ onSnapshot(qOmni, (snapshot) => {
 // Initialize on load
 document.addEventListener('DOMContentLoaded', () => {
     initChart();
+    
+    const wpmInput = document.getElementById('baseline-wpm');
+    if (localStorage.getItem('baselineWPM')) {
+        wpmInput.value = localStorage.getItem('baselineWPM');
+    }
+    wpmInput.addEventListener('input', () => {
+        localStorage.setItem('baselineWPM', wpmInput.value);
+        updateMetricsUI();
+    });
 });

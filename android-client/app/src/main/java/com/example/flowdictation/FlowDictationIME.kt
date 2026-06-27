@@ -61,15 +61,17 @@ class FlowDictationIME : InputMethodService() {
     private lateinit var deepSymbolContainer: LinearLayout
     private lateinit var calcContainer: LinearLayout
     private lateinit var spacebarButton: RelativeLayout
-    private lateinit var dictationButton: TextView
+    private lateinit var dictationButtonContainer: RelativeLayout
     private lateinit var calcDisplay: TextView
+    
+    private lateinit var mainVisualizer: AudioVisualizerView
+    private lateinit var spacebarVisualizer: AudioVisualizerView
     
     private var isRecording = false
     private var isOmniMode = false
+    private var isGoogleSearchMode = false
     private var isShifted = false
     private var currentCalcText = ""
-    private var spacebarAnimator: ObjectAnimator? = null
-    private var recordingAnimator: ObjectAnimator? = null
 
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
@@ -88,6 +90,42 @@ class FlowDictationIME : InputMethodService() {
     private val db by lazy { FirebaseFirestore.getInstance() }
     private var globalDictionary = ""
     private var omniCommands = mutableMapOf<String, String>()
+
+    inner class AudioVisualizerView(context: Context) : View(context) {
+        var amplitudes = FloatArray(7) { 0.2f }
+        var isRecording = false
+        var activeColor = Color.WHITE
+        var idleColor = Color.parseColor("#888888")
+        private val paint = android.graphics.Paint().apply {
+            style = android.graphics.Paint.Style.FILL
+            strokeCap = android.graphics.Paint.Cap.ROUND
+        }
+        
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            super.onDraw(canvas)
+            val w = width.toFloat()
+            val h = height.toFloat()
+            val numBars = amplitudes.size
+            val spacing = 12f
+            val totalSpacing = spacing * (numBars - 1)
+            val barWidth = 6f * resources.displayMetrics.density
+            paint.strokeWidth = barWidth
+            val totalWidth = (barWidth * numBars) + totalSpacing
+            var startX = (w - totalWidth) / 2f + (barWidth / 2f)
+            
+            paint.color = if (isRecording) activeColor else idleColor
+            val staticAmps = listOf(0.3f, 0.6f, 0.9f, 1.0f, 0.9f, 0.6f, 0.3f)
+            
+            for (i in amplitudes.indices) {
+                val amp = if (isRecording) amplitudes[i] else staticAmps[i]
+                val barHeight = Math.max(barWidth, h * amp * 0.9f)
+                val top = (h - barHeight) / 2f
+                val bottom = top + barHeight
+                canvas.drawLine(startX, top, startX, bottom, paint)
+                startX += barWidth + spacing
+            }
+        }
+    }
 
     private val cameraResultReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -143,13 +181,34 @@ class FlowDictationIME : InputMethodService() {
             weightSum = 5f
         }
 
-        dictationButton = createToolbarButton("🎤 Flow", "#2A2A2A", "#FFFFFF", weight = 1f) {
-            if (ContextCompat.checkSelfPermission(this@FlowDictationIME, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) toggleDictation()
+        dictationButtonContainer = RelativeLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, (80 * density).toInt(), 1f).apply { setMargins((1 * density).toInt(), (1 * density).toInt(), (1 * density).toInt(), (1 * density).toInt()) }
+            background = GradientDrawable().apply { setColor(Color.parseColor("#2A2A2A")); cornerRadius = 12f * density }
+            
+            mainVisualizer = AudioVisualizerView(this@FlowDictationIME).apply {
+                layoutParams = RelativeLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            }
+            addView(mainVisualizer)
+            
+            setOnTouchListener { v, event ->
+                when(event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        v.background = GradientDrawable().apply { setColor(Color.parseColor("#404040")); cornerRadius = 12f * density }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        val bgColor = if (isRecording) { if (isOmniMode || isGoogleSearchMode) "#55FFAA" else "#2A2A2A" } else "#2A2A2A"
+                        v.background = GradientDrawable().apply { setColor(Color.parseColor(bgColor)); cornerRadius = 12f * density }
+                    }
+                }
+                false
+            }
+            
+            setOnClickListener {
+                if (ContextCompat.checkSelfPermission(this@FlowDictationIME, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) toggleDictation()
+            }
         }
-        dictationButton.layoutParams = LinearLayout.LayoutParams(0, (80 * density).toInt(), 1f).apply {
-            setMargins((1 * density).toInt(), (1 * density).toInt(), (1 * density).toInt(), (1 * density).toInt())
-        }
-        toolbarContainer.addView(dictationButton)
+        toolbarContainer.addView(dictationButtonContainer)
 
         val rightContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -176,13 +235,9 @@ class FlowDictationIME : InputMethodService() {
         toolbarRow1.addView(btnCopy)
         toolbarRow1.addView(btnNuke)
         
-        val btnGemini = createToolbarButton("✦ Gemini", "#1E1E1E", "#AA55FF", weight = 1f) {
-            try { 
-                val intent = Intent(Intent.ACTION_VOICE_COMMAND)
-                intent.setPackage("com.google.android.googlequicksearchbox")
-                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                startActivity(intent) 
-            } catch (e: Exception) {}
+        val btnGoogle = createToolbarButton("🔍 Google", "#1E1E1E", "#AA55FF", weight = 1f) {
+            isGoogleSearchMode = true
+            toggleDictation()
         }
         val btnOmni = createToolbarButton("🪄 Omni", "#1E1E1E", "#55FFAA", weight = 1f) {
             isOmniMode = true
@@ -191,7 +246,7 @@ class FlowDictationIME : InputMethodService() {
         val btnCalc = createToolbarButton("🧮 Calc", "#1E1E1E", "#FFAA55", weight = 1f) { toggleCalculatorMode() }
         val btnRewrite = createToolbarButton("✨ Fix", "#1E1E1E", "#FF55AA", weight = 1f) { rewriteText() }
         
-        toolbarRow2.addView(btnGemini)
+        toolbarRow2.addView(btnGoogle)
         toolbarRow2.addView(btnOmni)
         toolbarRow2.addView(btnCalc)
         toolbarRow2.addView(btnRewrite)
@@ -225,9 +280,22 @@ class FlowDictationIME : InputMethodService() {
 
         val r0 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); weightSum = 10f }
         val numbers = listOf("1","2","3","4","5","6","7","8","9","0")
-        val subs = listOf("","","","","","","🙂","😛","😂","👎")
+        val longPressTexts = listOf(
+            "Thanks,",
+            "Zach",
+            "Zach Teske\nFUMA Insurance\nzteske@fumainsurance.com\n785-456-3505",
+            "zteske@fumainsurance.com",
+            "zeteske@gmail.com",
+            "https://quickquote-app-sable.vercel.app/?mode=customQuote&config=eyJjYXRzIjpbXSwiaGlkZGVuIjpbXX0=&first=&last=",
+            "🙂",
+            "😛",
+            "😂",
+            "👎"
+        )
         for (i in 0..9) {
-            r0.addView(createKeyButton(numbers[i], isSpecial = false, subscript = subs[i], longPressAction = { currentInputConnection?.commitText(if (subs[i].isNotEmpty()) subs[i] else numbers[i], 1) }) {
+            val lpText = longPressTexts[i]
+            val dispSub = if (i > 5) lpText else ""
+            r0.addView(createKeyButton(numbers[i], isSpecial = false, subscript = dispSub, longPressAction = { currentInputConnection?.commitText(lpText, 1) }) {
                 currentInputConnection?.commitText(if (isShifted) numbers[i].uppercase() else numbers[i], 1)
                 if (isShifted) { isShifted = false; updateShiftState() }
             })
@@ -236,8 +304,11 @@ class FlowDictationIME : InputMethodService() {
 
         val r1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); weightSum = 10f }
         val qrow = listOf("q","w","e","r","t","y","u","i","o","p")
-        for (k in qrow) {
-            r1.addView(createKeyButton(k, isSpecial = false, subscript = "") {
+        val qrowSub = listOf("%","\\","|","=","[","]","<",">","{","}")
+        for (i in qrow.indices) {
+            val k = qrow[i]
+            val sub = qrowSub[i]
+            r1.addView(createKeyButton(k, isSpecial = false, subscript = sub, longPressAction = { currentInputConnection?.commitText(sub, 1) }) {
                 currentInputConnection?.commitText(if (isShifted) k.uppercase() else k, 1)
                 if (isShifted) { isShifted = false; updateShiftState() }
             })
@@ -247,8 +318,11 @@ class FlowDictationIME : InputMethodService() {
         val r2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); weightSum = 10f }
         r2.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 0.5f) })
         val arow = listOf("a","s","d","f","g","h","j","k","l")
-        for (k in arow) {
-            r2.addView(createKeyButton(k, isSpecial = false, subscript = "") {
+        val arowSub = listOf("@","#","$","_","&","-","+","(",")")
+        for (i in arow.indices) {
+            val k = arow[i]
+            val sub = arowSub[i]
+            r2.addView(createKeyButton(k, isSpecial = false, subscript = sub, longPressAction = { currentInputConnection?.commitText(sub, 1) }) {
                 currentInputConnection?.commitText(if (isShifted) k.uppercase() else k, 1)
                 if (isShifted) { isShifted = false; updateShiftState() }
             })
@@ -261,8 +335,11 @@ class FlowDictationIME : InputMethodService() {
             isShifted = !isShifted; updateShiftState()
         })
         val zrow = listOf("z","x","c","v","b","n","m")
-        for (k in zrow) {
-            r3.addView(createKeyButton(k, isSpecial = false, subscript = "") {
+        val zrowSub = listOf("*","\"","'",":",";","!","?")
+        for (i in zrow.indices) {
+            val k = zrow[i]
+            val sub = zrowSub[i]
+            r3.addView(createKeyButton(k, isSpecial = false, subscript = sub, longPressAction = { currentInputConnection?.commitText(sub, 1) }) {
                 currentInputConnection?.commitText(if (isShifted) k.uppercase() else k, 1)
                 if (isShifted) { isShifted = false; updateShiftState() }
             })
@@ -282,7 +359,12 @@ class FlowDictationIME : InputMethodService() {
         
         bottomRow.addView(createKeyButton(".", isSpecial = true, weight = 1f, subscript = "🤷‍♂️", longPressAction = { currentInputConnection?.commitText("🤷‍♂️", 1) }) { currentInputConnection?.commitText(".", 1) })
         bottomRow.addView(createKeyButton("↵", isSpecial = true, weight = 1.5f, bgColor = "#4A90E2", textColor = "#FFFFFF") {
-            currentInputConnection?.commitText("\n", 1)
+            val action = currentInputEditorInfo.imeOptions and android.view.inputmethod.EditorInfo.IME_MASK_ACTION
+            if (action == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH || action == android.view.inputmethod.EditorInfo.IME_ACTION_GO) {
+                currentInputConnection?.performEditorAction(action)
+            } else {
+                currentInputConnection?.commitText("\n", 1)
+            }
         })
         
         container.addView(bottomRow)
@@ -311,7 +393,14 @@ class FlowDictationIME : InputMethodService() {
         r3.addView(createKeyButton("📸", isSpecial = true, weight = 1f) { val intent = Intent(this, CameraCaptureActivity::class.java); intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(intent) })
         r3.addView(createKeyButton("Space", isSpecial = false, weight = 4f) { currentInputConnection?.commitText(" ", 1) })
         r3.addView(createKeyButton(".", isSpecial = true, weight = 1f, subscript = "🤷‍♂️", longPressAction = { currentInputConnection?.commitText("🤷‍♂️", 1) }) { currentInputConnection?.commitText(".", 1) })
-        r3.addView(createKeyButton("↵", isSpecial = true, weight = 1.5f, bgColor = "#4A90E2", textColor = "#FFFFFF") { currentInputConnection?.commitText("\n", 1) })
+        r3.addView(createKeyButton("↵", isSpecial = true, weight = 1.5f, bgColor = "#4A90E2", textColor = "#FFFFFF") {
+            val action = currentInputEditorInfo.imeOptions and android.view.inputmethod.EditorInfo.IME_MASK_ACTION
+            if (action == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH || action == android.view.inputmethod.EditorInfo.IME_ACTION_GO) {
+                currentInputConnection?.performEditorAction(action)
+            } else {
+                currentInputConnection?.commitText("\n", 1)
+            }
+        })
         
         container.addView(r0); container.addView(r1); container.addView(r2); container.addView(r3)
         return container
@@ -339,7 +428,14 @@ class FlowDictationIME : InputMethodService() {
         r3.addView(createKeyButton("1234", isSpecial = true, weight = 1f) { toggleCalculatorMode() })
         r3.addView(createKeyButton("Space", isSpecial = false, weight = 4f) { currentInputConnection?.commitText(" ", 1) })
         r3.addView(createKeyButton(">", isSpecial = true, weight = 1f) { currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT)); currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_RIGHT)) })
-        r3.addView(createKeyButton("↵", isSpecial = true, weight = 1.5f, bgColor = "#4A90E2", textColor = "#FFFFFF") { currentInputConnection?.commitText("\n", 1) })
+        r3.addView(createKeyButton("↵", isSpecial = true, weight = 1.5f, bgColor = "#4A90E2", textColor = "#FFFFFF") {
+            val action = currentInputEditorInfo.imeOptions and android.view.inputmethod.EditorInfo.IME_MASK_ACTION
+            if (action == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH || action == android.view.inputmethod.EditorInfo.IME_ACTION_GO) {
+                currentInputConnection?.performEditorAction(action)
+            } else {
+                currentInputConnection?.commitText("\n", 1)
+            }
+        })
         
         container.addView(r0); container.addView(r1); container.addView(r2); container.addView(r3)
         return container
@@ -368,7 +464,10 @@ class FlowDictationIME : InputMethodService() {
                 }
                 addView(r)
             }
-            addView(createKeyButton("Insert", isSpecial = true, weight = 4f) { currentInputConnection?.commitText(calcDisplay.text, 1); toggleCalculatorMode() })
+            val calcBottomRow = LinearLayout(this@FlowDictationIME).apply { orientation = LinearLayout.HORIZONTAL; layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); weightSum = 2f }
+            calcBottomRow.addView(createKeyButton("Return", isSpecial = true, weight = 1f) { toggleCalculatorMode() })
+            calcBottomRow.addView(createKeyButton("Insert Result", isSpecial = true, weight = 1f, bgColor = "#4A90E2", textColor = "#FFFFFF") { currentInputConnection?.commitText(calcDisplay.text, 1); toggleCalculatorMode() })
+            addView(calcBottomRow)
         }
     }
 
@@ -426,6 +525,17 @@ class FlowDictationIME : InputMethodService() {
             text = textStr; setTextColor(Color.parseColor(textColor)); textSize = 12f; gravity = Gravity.CENTER
             background = GradientDrawable().apply { setColor(Color.parseColor(bgColor)); cornerRadius = 12f * density }
             layoutParams = LinearLayout.LayoutParams(0, (38 * density).toInt(), weight).apply { setMargins((1*density).toInt(), (1*density).toInt(), (1*density).toInt(), (1*density).toInt()) }
+            
+            setOnTouchListener { v, event ->
+                when(event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        v.background = GradientDrawable().apply { setColor(Color.parseColor("#404040")); cornerRadius = 12f * density }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> v.background = GradientDrawable().apply { setColor(Color.parseColor(bgColor)); cornerRadius = 12f * density }
+                }
+                false
+            }
             setOnClickListener { onClick() }
         }
     }
@@ -454,7 +564,10 @@ class FlowDictationIME : InputMethodService() {
             
             setOnTouchListener { v, event ->
                 when(event.action) {
-                    MotionEvent.ACTION_DOWN -> v.background = GradientDrawable().apply { setColor(Color.parseColor("#606060")); cornerRadius = 6f * density }
+                    MotionEvent.ACTION_DOWN -> {
+                        v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        v.background = GradientDrawable().apply { setColor(Color.parseColor("#606060")); cornerRadius = 6f * density }
+                    }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> v.background = GradientDrawable().apply { setColor(Color.parseColor(defaultColor)); cornerRadius = 6f * density }
                 }
                 false
@@ -475,13 +588,36 @@ class FlowDictationIME : InputMethodService() {
             addView(TextView(this@FlowDictationIME).apply { text = "⌫"; setTextColor(Color.WHITE); textSize = 20f; gravity = Gravity.CENTER; layoutParams = RelativeLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT) })
             
             var handler = Handler(Looper.getMainLooper())
-            var runnable = object : Runnable { override fun run() { currentInputConnection?.deleteSurroundingText(1, 0); handler.postDelayed(this, 100) } }
+            var heldTime = 0L
+            var runnable = object : Runnable { 
+                override fun run() { 
+                    heldTime += 100
+                    if (heldTime > 500) {
+                        val textBefore = currentInputConnection?.getTextBeforeCursor(50, 0) ?: ""
+                        val lastSpace = textBefore.trimEnd().lastIndexOf(' ')
+                        if (lastSpace != -1) {
+                            val toDelete = textBefore.length - lastSpace
+                            currentInputConnection?.deleteSurroundingText(toDelete, 0)
+                        } else {
+                            currentInputConnection?.deleteSurroundingText(textBefore.length, 0)
+                        }
+                        handler.postDelayed(this, 350) 
+                    } else {
+                        currentInputConnection?.deleteSurroundingText(1, 0) 
+                        handler.postDelayed(this, 100) 
+                    }
+                } 
+            }
             
             setOnTouchListener { v, event ->
                 if (event.action == MotionEvent.ACTION_DOWN) {
+                    v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    v.background = GradientDrawable().apply { setColor(Color.parseColor("#606060")); cornerRadius = 6f * density }
+                    heldTime = 0L
                     currentInputConnection?.deleteSurroundingText(1, 0)
                     handler.postDelayed(runnable, 400)
                 } else if (event.action == MotionEvent.ACTION_UP || event.action == MotionEvent.ACTION_CANCEL) {
+                    v.background = GradientDrawable().apply { setColor(Color.parseColor("#303030")); cornerRadius = 6f * density }
                     handler.removeCallbacks(runnable)
                 }
                 true
@@ -494,9 +630,48 @@ class FlowDictationIME : InputMethodService() {
         return RelativeLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(0, (42 * density).toInt(), weight).apply { setMargins((2*density).toInt(), (4*density).toInt(), (2*density).toInt(), (4*density).toInt()) }
             background = GradientDrawable().apply { setColor(Color.parseColor("#404040")); cornerRadius = 6f * density }
+            
+            spacebarVisualizer = AudioVisualizerView(this@FlowDictationIME).apply {
+                layoutParams = RelativeLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                alpha = 0.2f
+            }
+            addView(spacebarVisualizer)
+            
             addView(TextView(this@FlowDictationIME).apply { text = "Space"; setTextColor(Color.WHITE); textSize = 16f; gravity = Gravity.CENTER; layoutParams = RelativeLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT) })
-            setOnClickListener { currentInputConnection?.commitText(" ", 1) }
-            setOnLongClickListener { isOmniMode = false; toggleDictation(); true }
+            
+            var handler = Handler(Looper.getMainLooper())
+            var isSpacebarRecording = false
+            var longPressRunnable = Runnable {
+                isSpacebarRecording = true
+                isOmniMode = false
+                if (!isRecording) toggleDictation()
+            }
+            
+            setOnTouchListener { v, event ->
+                when(event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        v.background = GradientDrawable().apply { setColor(Color.parseColor("#606060")); cornerRadius = 6f * density }
+                        isSpacebarRecording = false
+                        handler.postDelayed(longPressRunnable, 400)
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        handler.removeCallbacks(longPressRunnable)
+                        v.background = GradientDrawable().apply { setColor(Color.parseColor("#404040")); cornerRadius = 6f * density }
+                        if (isSpacebarRecording) {
+                            if (isRecording) toggleDictation()
+                        } else {
+                            currentInputConnection?.commitText(" ", 1)
+                        }
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        handler.removeCallbacks(longPressRunnable)
+                        v.background = GradientDrawable().apply { setColor(Color.parseColor("#404040")); cornerRadius = 6f * density }
+                        if (isSpacebarRecording && isRecording) toggleDictation()
+                    }
+                }
+                true
+            }
         }
     }
 
@@ -515,26 +690,28 @@ class FlowDictationIME : InputMethodService() {
     private fun updateAllDictationUI() {
         val density = resources.displayMetrics.density
         if (isRecording) {
-            val bgColor = if (isOmniMode) "#55FFAA" else "#2A2A2A"
-            dictationButton.background = GradientDrawable().apply { setColor(Color.parseColor(bgColor)); cornerRadius = 12f * density }
-            if (recordingAnimator == null) {
-                val scaleX = PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, 1.1f)
-                val scaleY = PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, 1.1f)
-                recordingAnimator = ObjectAnimator.ofPropertyValuesHolder(dictationButton, scaleX, scaleY).apply { duration = 800; repeatMode = ObjectAnimator.REVERSE; repeatCount = ObjectAnimator.INFINITE; start() }
-            } else { recordingAnimator?.start() }
+            val bgColor = if (isOmniMode || isGoogleSearchMode) "#55FFAA" else "#2A2A2A"
+            val visColor = if (isOmniMode || isGoogleSearchMode) Color.parseColor("#000000") else Color.WHITE
+            
+            dictationButtonContainer.background = GradientDrawable().apply { setColor(Color.parseColor(bgColor)); cornerRadius = 12f * density }
+            mainVisualizer.isRecording = true
+            mainVisualizer.activeColor = visColor
+            mainVisualizer.invalidate()
             
             spacebarButton.background = GradientDrawable().apply { setColor(Color.parseColor(bgColor)); cornerRadius = 6f * density }
-            if (spacebarAnimator == null) {
-                val scaleX = PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, 1.1f)
-                val scaleY = PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, 1.1f)
-                spacebarAnimator = ObjectAnimator.ofPropertyValuesHolder(spacebarButton, scaleX, scaleY).apply { duration = 800; repeatCount = ObjectAnimator.INFINITE; repeatMode = ObjectAnimator.REVERSE; start() }
-            } else { spacebarAnimator?.start() }
+            spacebarVisualizer.isRecording = true
+            spacebarVisualizer.activeColor = visColor
+            spacebarVisualizer.alpha = 0.5f
+            spacebarVisualizer.invalidate()
         } else {
-            recordingAnimator?.cancel(); dictationButton.scaleX = 1f; dictationButton.scaleY = 1f
-            dictationButton.background = GradientDrawable().apply { setColor(Color.parseColor("#2A2A2A")); cornerRadius = 12f * density }
-            spacebarAnimator?.cancel(); spacebarButton.scaleX = 1f; spacebarButton.scaleY = 1f
+            dictationButtonContainer.background = GradientDrawable().apply { setColor(Color.parseColor("#2A2A2A")); cornerRadius = 12f * density }
+            mainVisualizer.isRecording = false
+            mainVisualizer.invalidate()
+            
             spacebarButton.background = GradientDrawable().apply { setColor(Color.parseColor("#404040")); cornerRadius = 6f * density }
-            isOmniMode = false
+            spacebarVisualizer.isRecording = false
+            spacebarVisualizer.alpha = 0.2f
+            spacebarVisualizer.invalidate()
         }
     }
 
@@ -547,7 +724,30 @@ class FlowDictationIME : InputMethodService() {
             val data = ByteArray(bufferSize)
             while (isRecording) {
                 val read = audioRecord?.read(data, 0, data.size) ?: 0
-                if (read > 0) audioBuffer.write(data, 0, read)
+                if (read > 0) {
+                    audioBuffer.write(data, 0, read)
+                    var sum = 0.0
+                    for (i in 0 until read step 2) {
+                        if (i+1 < read) {
+                            val sample = (data[i].toInt() and 0xFF) or (data[i+1].toInt() shl 8)
+                            val s = sample.toShort().toFloat()
+                            sum += (s * s)
+                        }
+                    }
+                    val rms = Math.sqrt(sum / (read / 2.0)).toFloat()
+                    val normalizedAmp = Math.min(1f, rms / 2500f) // Boosted sensitivity for better animation
+                    
+                    for (i in 0 until 6) {
+                        mainVisualizer.amplitudes[i] = mainVisualizer.amplitudes[i+1]
+                    }
+                    mainVisualizer.amplitudes[6] = normalizedAmp
+                    
+                    mainVisualizer.post { mainVisualizer.invalidate() }
+                    spacebarVisualizer.post { 
+                        System.arraycopy(mainVisualizer.amplitudes, 0, spacebarVisualizer.amplitudes, 0, 7)
+                        spacebarVisualizer.invalidate() 
+                    }
+                }
             }
         }
         recordingThread?.start()
@@ -569,13 +769,38 @@ class FlowDictationIME : InputMethodService() {
         coroutineScope.launch {
             if (isOmniMode) {
                 processOmniMode(wavData)
+            } else if (isGoogleSearchMode) {
+                val query = transcribeWithGroq(wavData)
+                if (query.isNotBlank()) {
+                    val intent = Intent(Intent.ACTION_WEB_SEARCH)
+                    intent.putExtra(android.app.SearchManager.QUERY, query)
+                    intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    try { startActivity(intent) } catch (e: Exception) {}
+                }
+                isGoogleSearchMode = false
             } else {
                 val transcribedText = transcribeWithGroq(wavData)
                 if (transcribedText.isNotBlank()) {
-                    val formatted = formatWithGemini(transcribedText)
+                    val formatted = formatWithGroq(transcribedText)
                     currentInputConnection?.commitText(formatted + " ", 1)
+                    
+                    try {
+                        val wordCount = formatted.trim().split(Regex("\\s+")).size
+                        val durationSeconds = pcmData.size / 2.0 / sampleRate
+                        val wpm = if (durationSeconds > 0) (wordCount / durationSeconds * 60).toInt() else 0
+                        
+                        val metricData = hashMapOf(
+                            "wordCount" to wordCount,
+                            "durationSeconds" to durationSeconds,
+                            "wpm" to wpm,
+                            "timestamp" to java.util.Date(),
+                            "device" to "Android Phone"
+                        )
+                        db.collection("metrics").add(metricData)
+                    } catch(e: Exception) {}
                 }
             }
+            isOmniMode = false
         }
     }
 
@@ -620,10 +845,29 @@ class FlowDictationIME : InputMethodService() {
         return@withContext ""
     }
 
-    private suspend fun formatWithGemini(transcribedText: String): String = withContext(Dispatchers.IO) {
+    private suspend fun formatWithGroq(transcribedText: String): String = withContext(Dispatchers.IO) {
         try {
-            val model = GenerativeModel("gemini-1.5-flash", geminiApiKey, systemInstruction = content { text("Format dictation with correct punctuation. Strictly follow: " + globalDictionary) })
-            return@withContext model.generateContent(transcribedText).text?.trim() ?: transcribedText
+            val client = OkHttpClient()
+            val json = JSONObject()
+            json.put("model", "openai/gpt-oss-20b")
+            val messages = JSONArray()
+            val sysMsg = JSONObject().apply { put("role", "system"); put("content", "You are a transcription formatting engine. Your ONLY job is to intelligently format the dictated text. You MUST: 1. Fix punctuation and capitalization. 2. Remove rambling filler words. 3. Add appropriate paragraph spacing and bullet points if the dictation implies a list or structure. 4. Self-Correction Rules: If the user says 'scratch that', 'no wait', 'actually', or audibly corrects themselves mid-sentence, you MUST intelligently apply the correction, remove the mistaken phrase, and output ONLY the final intended meaning. DO NOT include the correction keywords in the final output. DO NOT answer questions. DO NOT converse with the user. Output strictly the formatted text, applying: " + globalDictionary) }
+            val userMsg = JSONObject().apply { put("role", "user"); put("content", transcribedText) }
+            messages.put(sysMsg)
+            messages.put(userMsg)
+            json.put("messages", messages)
+            
+            val requestBody = json.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url("https://api.groq.com/openai/v1/chat/completions")
+                .header("Authorization", "Bearer $groqApiKey")
+                .post(requestBody)
+                .build()
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val respObj = JSONObject(response.body?.string() ?: "")
+                return@withContext respObj.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content").trim()
+            }
         } catch (e: Exception) {}
         return@withContext transcribedText
     }
@@ -631,8 +875,12 @@ class FlowDictationIME : InputMethodService() {
     private fun scanPlacardWithGemini(path: String) {
         coroutineScope.launch {
             try {
-                val bitmap = BitmapFactory.decodeFile(path)
-                val model = GenerativeModel("gemini-1.5-flash", geminiApiKey, systemInstruction = content { text("Extract all serial numbers and text from this placard") })
+                val originalBitmap = BitmapFactory.decodeFile(path)
+                val maxDim = 1024f
+                val scale = Math.min(maxDim / originalBitmap.width, maxDim / originalBitmap.height)
+                val bitmap = if (scale < 1f) android.graphics.Bitmap.createScaledBitmap(originalBitmap, (originalBitmap.width * scale).toInt(), (originalBitmap.height * scale).toInt(), true) else originalBitmap
+                
+                val model = GenerativeModel("gemini-3.5-flash", geminiApiKey, systemInstruction = content { text("Analyze this image and extract the model number, serial number, make, and build year. If and only if it is an AC unit, include the tonnage. Output ONLY the raw values separated by newlines. Do not use any markdown (no asterisks or bold text) and do not include any introductory sentences.") })
                 val resp = model.generateContent(content { image(bitmap) }).text ?: ""
                 currentInputConnection?.commitText(resp, 1)
             } catch (e: Exception) {}
@@ -642,13 +890,47 @@ class FlowDictationIME : InputMethodService() {
     private fun rewriteText() {
         val ic = currentInputConnection
         val text = ic?.getExtractedText(ExtractedTextRequest(), 0)?.text?.toString() ?: return
-        coroutineScope.launch {
+        coroutineScope.launch(Dispatchers.IO) {
             try {
-                val model = GenerativeModel("gemini-1.5-flash", geminiApiKey, systemInstruction = content { text("Rewrite this text professionally, fix grammar.") })
-                val resp = model.generateContent(text).text ?: ""
-                ic.deleteSurroundingText(10000, 10000)
-                ic.commitText(resp, 1)
-            } catch (e: Exception) {}
+                val sysPrompt = "You are a professional text formatter. Rewrite the following text professionally, fix all grammar, punctuation, and capitalization issues, and remove rambling. Output strictly the fixed text."
+                val model = com.google.ai.client.generativeai.GenerativeModel("gemini-3.5-flash", geminiApiKey, systemInstruction = com.google.ai.client.generativeai.type.content { text(sysPrompt) })
+                val resp = model.generateContent(text).text?.trim() ?: "No response."
+                withContext(Dispatchers.Main) {
+                    ic.deleteSurroundingText(10000, 10000)
+                    ic.commitText(resp + " ", 1)
+                }
+            } catch(e: Exception) {
+                withContext(Dispatchers.Main) {
+                    ic.commitText("Error: ${e.message} ", 1)
+                }
+            }
+        }
+    }
+
+    private fun pasteLatestGalleryImage() {
+        coroutineScope.launch(Dispatchers.IO) {
+            val proj = arrayOf(MediaStore.Images.Media._ID)
+            val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
+            val cursor = contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, proj, null, null, sortOrder)
+            var uri: Uri? = null
+            if (cursor != null && cursor.moveToFirst()) {
+                val id = cursor.getLong(0)
+                uri = android.content.ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+            }
+            cursor?.close()
+            
+            withContext(Dispatchers.Main) {
+                if (uri != null) {
+                    val description = android.content.ClipDescription("Latest Image", arrayOf("image/*", "image/jpeg", "image/png"))
+                    val contentInfo = android.view.inputmethod.InputContentInfo(uri, description)
+                    val success = currentInputConnection?.commitContent(contentInfo, android.view.inputmethod.InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION, null)
+                    if (success != true) {
+                        currentInputConnection?.commitText("App does not support pasting images.", 1)
+                    }
+                } else {
+                    currentInputConnection?.commitText("No image found.", 1)
+                }
+            }
         }
     }
 
@@ -656,7 +938,6 @@ class FlowDictationIME : InputMethodService() {
         val query = transcribeWithGroq(wavData)
         if (query.isBlank()) return
         
-        // Check Cloud Commands first
         for ((trigger, action) in omniCommands) {
             if (query.lowercase().contains(trigger)) {
                 currentInputConnection?.commitText(action, 1)
@@ -664,7 +945,6 @@ class FlowDictationIME : InputMethodService() {
             }
         }
 
-        // Native Contacts search tool implementation
         fun getContact(name: String): String {
             val uri = android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI
             val proj = arrayOf(android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER)
@@ -677,20 +957,30 @@ class FlowDictationIME : InputMethodService() {
             return contactInfo
         }
 
-        // LLM Tool routing
-        val prompt = "You are an Omni Agent on an Android keyboard. User requested: '$query'. If asking for a contact, return JSON: {\"tool\":\"contacts\", \"arg\":\"[name]\"}. Otherwise return text."
+        val prompt = "You are an Omni Agent acting as an Android keyboard. User requested: '$query'. Do NOT echo the user's command. Act as the user's hands. Provide ONLY the raw requested answer. Absolutely no conversational filler, no introductory text, and no markdown. If asked a math question, provide only the numeric answer (e.g., '108'). If asked to type or paste something, output ONLY the exact text they want generated. If asking for a contact, return JSON: {\"tool\":\"contacts\", \"arg\":\"[name]\"}."
         try {
-            val model = GenerativeModel("gemini-1.5-flash", geminiApiKey)
-            val resp = model.generateContent(prompt).text ?: ""
-            if (resp.contains("contacts")) {
-                try {
-                    val json = JSONObject(resp.substring(resp.indexOf("{"), resp.lastIndexOf("}") + 1))
-                    val contactStr = getContact(json.getString("arg"))
-                    if (contactStr.isNotEmpty()) currentInputConnection?.commitText(contactStr, 1) else currentInputConnection?.commitText("Contact not found.", 1)
-                } catch (e: Exception) { currentInputConnection?.commitText("Contacts tool error.", 1) }
-            } else {
-                currentInputConnection?.commitText(resp, 1)
+            val sysPrompt = "You are an intelligent assistant. Answer factual queries, solve math, and follow commands briefly. You have access to these contacts/commands: " + omniCommands.entries.joinToString { it.key + ":" + it.value } + " Use them if asked. NEVER refuse to help."
+            val model = com.google.ai.client.generativeai.GenerativeModel("gemini-3.5-flash", geminiApiKey, systemInstruction = com.google.ai.client.generativeai.type.content { text(sysPrompt) })
+            
+            withContext(Dispatchers.IO) {
+                val respObj = model.generateContent(prompt)
+                val resp = respObj.text?.trim() ?: ""
+                withContext(Dispatchers.Main) {
+                    if (resp.contains("contacts")) {
+                        try {
+                            val parsed = JSONObject(resp.substring(resp.indexOf("{"), resp.lastIndexOf("}") + 1))
+                            val contactStr = getContact(parsed.getString("arg"))
+                            if (contactStr.isNotEmpty()) currentInputConnection?.commitText(contactStr, 1) else currentInputConnection?.commitText("Contact not found.", 1)
+                        } catch (e: Exception) { currentInputConnection?.commitText("Contacts tool error.", 1) }
+                    } else if (resp.contains("gallery")) {
+                        pasteLatestGalleryImage()
+                    } else {
+                        currentInputConnection?.commitText(resp, 1)
+                    }
+                }
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            withContext(Dispatchers.Main) { currentInputConnection?.commitText("Error: ${e.message}", 1) }
+        }
     }
 }
