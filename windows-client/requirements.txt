@@ -1,0 +1,9 @@
+pyaudio
+keyboard
+pyautogui
+pyperclip
+PyQt6
+groq
+google-generativeai
+firebase-admin
+python-dotenv

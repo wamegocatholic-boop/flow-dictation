@@ -1,0 +1,9 @@
+/android-client/decompiled_apk/
+/android-client/.gradle/
+/android-client/build/
+/android-client/app/build/
+/android-client/local.properties
+/windows-client/build/
+/windows-client/dist/
+__pycache__/
+*.pyc

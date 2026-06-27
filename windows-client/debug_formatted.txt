@@ -1,0 +1,15 @@
+To get the dictation feature on your PC, you'll need to follow these steps:
+
+First, ensure that your PC meets the system requirements for Windows Dictation. You can check the Windows System Requirements for more information.
+
+Next, go to the Start menu and type "Speech Recognition" in the search bar. Click on "Speech Recognition" to open the Windows Speech Recognition settings.
+
+In the Speech Recognition settings, click on the "Start Speech Recognition" button to begin the setup process. You'll be guided through a series of steps to set up the dictation feature.
+
+Once you've completed the setup process, you can access the dictation feature by pressing the Windows key + H, or by clicking on the microphone icon in the taskbar and selecting "Start listening."
+
+To use the dictation feature on your PC, simply speak into your microphone, and the text will appear on your screen. You can then edit the text as needed.
+
+If you're using a specific application, such as Microsoft Word, you can also use the dictation feature within that application. To do this, click on the microphone icon in the application's toolbar and select "Start listening."
+
+Note: If you're using a third-party dictation software, you may need to follow the specific instructions provided by the software manufacturer to set up and use the dictation feature.

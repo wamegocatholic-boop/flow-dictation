@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flow Dictation Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <nav class="sidebar glass-panel">
+            <div class="brand">
+                <span class="icon">🎤</span>
+                <h1>Flow</h1>
+            </div>
+            <ul class="nav-links">
+                <li class="active" data-tab="metrics">📊 Metrics</li>
+                <li data-tab="dictionary">📖 Dictionary</li>
+                <li data-tab="omni">🪄 Omni Commands</li>
+            </ul>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="content">
+            
+            <!-- Metrics Section -->
+            <section id="metrics-view" class="view active-view">
+                <header>
+                    <h2>Your Performance</h2>
+                    <p>Track your dictation speed and efficiency.</p>
+                </header>
+
+                <div class="stats-grid">
+                    <div class="stat-card glass-panel">
+                        <h3>Total Words Dictated</h3>
+                        <p id="total-words" class="stat-value">0</p>
+                    </div>
+                    <div class="stat-card glass-panel">
+                        <h3>Average WPM</h3>
+                        <p id="avg-wpm" class="stat-value">0</p>
+                    </div>
+                    <div class="stat-card glass-panel">
+                        <h3>Total Time Saved</h3>
+                        <p id="time-saved" class="stat-value">0 hrs</p>
+                    </div>
+                </div>
+
+                <div class="chart-container glass-panel">
+                    <canvas id="wpmChart"></canvas>
+                </div>
+            </section>
+
+            <!-- Dictionary Section -->
+            <section id="dictionary-view" class="view">
+                <header>
+                    <h2>Global Dictionary</h2>
+                    <p>Manage your custom spellings and acronyms across all devices.</p>
+                </header>
+
+                <div class="dictionary-layout">
+                    <!-- Add Word Panel -->
+                    <div class="add-word-panel glass-panel">
+                        <h3>Add New Rule</h3>
+                        <form id="dict-form">
+                            <div class="input-group">
+                                <label for="dict-word">If I say...</label>
+                                <input type="text" id="dict-word" placeholder="e.g. fuma" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="dict-replacement">Type it as...</label>
+                                <input type="text" id="dict-replacement" placeholder="e.g. FUMA Insurance" required>
+                            </div>
+                            <button type="submit" class="primary-btn">Save Rule</button>
+                        </form>
+                    </div>
+
+                    <!-- Dictionary List -->
+                    <div class="dictionary-list-panel glass-panel">
+                        <h3>Active Rules</h3>
+                        <ul id="dictionary-list" class="dict-list">
+                            <!-- Populated by JS -->
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Omni Commands Section -->
+            <section id="omni-view" class="view">
+                <header>
+                    <h2>Omni Agent Commands</h2>
+                    <p>Manage your custom Agentic AI snippets and links.</p>
+                </header>
+
+                <div class="dictionary-layout">
+                    <!-- Add Command Panel -->
+                    <div class="add-word-panel glass-panel">
+                        <h3>Add New Command</h3>
+                        <form id="omni-form">
+                            <div class="input-group">
+                                <label for="omni-trigger">Command Trigger</label>
+                                <input type="text" id="omni-trigger" placeholder="e.g. Quick Quote Pro link" required>
+                            </div>
+                            <div class="input-group">
+                                <label for="omni-action">Action / Link</label>
+                                <input type="text" id="omni-action" placeholder="e.g. https://..." required>
+                            </div>
+                            <button type="submit" class="primary-btn">Save Command</button>
+                        </form>
+                    </div>
+
+                    <!-- Command List -->
+                    <div class="dictionary-list-panel glass-panel">
+                        <h3>Active Commands</h3>
+                        <ul id="omni-list" class="dict-list">
+                            <!-- Populated by JS -->
+                        </ul>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Firebase App Logic -->
+    <script type="module" src="app.js"></script>
+</body>
+</html>

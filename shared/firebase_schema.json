@@ -1,0 +1,22 @@
+{
+  "users": {
+    "$user_id": {
+      "settings": {
+        "wpm_target": 150,
+        "theme": "dark",
+        "custom_wake_word": "Chatter"
+      },
+      "stats": {
+        "total_words": 0,
+        "time_saved_minutes": 0,
+        "total_sessions": 0
+      },
+      "custom_dictionary": {
+        "acronyms": {
+          "ASAP": "As soon as possible",
+          "LGTM": "Looks good to me"
+        }
+      }
+    }
+  }
+}

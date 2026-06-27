@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "630128999591",
+    "project_id": "flow-dictation",
+    "storage_bucket": "flow-dictation.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:630128999591:android:cb1db3ffbc569213146f82",
+        "android_client_info": {
+          "package_name": "com.example.flowdictation"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC5u8uJFBMwTonan6AIfK4um7b1VrDGTYA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
