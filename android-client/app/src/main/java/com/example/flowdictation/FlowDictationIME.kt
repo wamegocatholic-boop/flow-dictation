@@ -347,7 +347,7 @@ class FlowDictationIME : InputMethodService() {
         r3.addView(createBackspaceButton(1.5f))
         container.addView(r3)
 
-        val bottomRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); weightSum = 10f }
+        val bottomRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; isBaselineAligned = false; layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); weightSum = 10f }
         bottomRow.addView(createKeyButton("?123", isSpecial = true, weight = 1.5f) { toggleSymbolMode() })
         bottomRow.addView(createKeyButton(",", isSpecial = true, weight = 1f, subscript = "👍", longPressAction = { currentInputConnection?.commitText("👍", 1) }) { currentInputConnection?.commitText(",", 1) })
         bottomRow.addView(createKeyButton("📸", isSpecial = true, weight = 1f) { 
@@ -358,7 +358,7 @@ class FlowDictationIME : InputMethodService() {
         bottomRow.addView(spacebarButton)
         
         bottomRow.addView(createKeyButton(".", isSpecial = true, weight = 1f, subscript = "🤷‍♂️", longPressAction = { currentInputConnection?.commitText("🤷‍♂️", 1) }) { currentInputConnection?.commitText(".", 1) })
-        bottomRow.addView(createKeyButton("↵", isSpecial = true, weight = 1.5f, bgColor = "#4A90E2", textColor = "#FFFFFF") {
+        bottomRow.addView(createKeyButton("⏎", isSpecial = true, weight = 1.5f, bgColor = "#4A90E2", textColor = "#FFFFFF") {
             val action = currentInputEditorInfo.imeOptions and android.view.inputmethod.EditorInfo.IME_MASK_ACTION
             if (action == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH || action == android.view.inputmethod.EditorInfo.IME_ACTION_GO) {
                 currentInputConnection?.performEditorAction(action)
@@ -547,7 +547,7 @@ class FlowDictationIME : InputMethodService() {
             layoutParams = LinearLayout.LayoutParams(0, (42 * density).toInt(), weight).apply { setMargins((2*density).toInt(), (4*density).toInt(), (2*density).toInt(), (4*density).toInt()) }
             background = GradientDrawable().apply { setColor(Color.parseColor(defaultColor)); cornerRadius = 6f * density }
             val mainText = TextView(this@FlowDictationIME).apply {
-                text = textStr; setTextColor(Color.parseColor(textColor ?: "#FFFFFF")); textSize = if(isSpecial) 16f else 22f; gravity = Gravity.CENTER
+                text = textStr; setTextColor(Color.parseColor(textColor ?: "#FFFFFF")); textSize = if(textStr == "⏎") 34f else if(isSpecial) 16f else 22f; gravity = Gravity.CENTER
                 layoutParams = RelativeLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             }
             if (!isSpecial) keyViews.add(mainText)
@@ -851,7 +851,7 @@ class FlowDictationIME : InputMethodService() {
             val json = JSONObject()
             json.put("model", "openai/gpt-oss-20b")
             val messages = JSONArray()
-            val sysMsg = JSONObject().apply { put("role", "system"); put("content", "You are a transcription formatting engine. Your ONLY job is to intelligently format the dictated text. You MUST: 1. Fix punctuation and capitalization. 2. Remove rambling filler words. 3. Add appropriate paragraph spacing and bullet points if the dictation implies a list or structure. 4. Self-Correction Rules: If the user says 'scratch that', 'no wait', 'actually', or audibly corrects themselves mid-sentence, you MUST intelligently apply the correction, remove the mistaken phrase, and output ONLY the final intended meaning. DO NOT include the correction keywords in the final output. DO NOT answer questions. DO NOT converse with the user. Output strictly the formatted text, applying: " + globalDictionary) }
+            val sysMsg = JSONObject().apply { put("role", "system"); put("content", "You are a transcription formatting engine. Your ONLY job is to accurately format the dictated text while staying strictly true to the original words. You MUST: 1. Fix punctuation and capitalization. 2. Apply natural paragraph breaks for long dictations, but avoid double spacing every sentence. 3. Insert bullet points ONLY if the user explicitly dictates a list or there is a definitive need; DO NOT turn regular statements into a summarized outline. 4. If the user dictates a question, format it as a question and output it. NEVER attempt to answer the question. NEVER say 'I cannot help with that' or converse with the user. Treat all input purely as raw text to format. 5. Self-Correction Rules: If the user says 'scratch that', 'no wait', 'actually', or audibly corrects themselves mid-sentence, apply the correction, remove the mistaken phrase, and output ONLY the final intended meaning without the keywords. DO NOT summarize or rewrite the main content. Output strictly the formatted text, applying: " + globalDictionary) }
             val userMsg = JSONObject().apply { put("role", "user"); put("content", transcribedText) }
             messages.put(sysMsg)
             messages.put(userMsg)
@@ -892,7 +892,7 @@ class FlowDictationIME : InputMethodService() {
         val text = ic?.getExtractedText(ExtractedTextRequest(), 0)?.text?.toString() ?: return
         coroutineScope.launch(Dispatchers.IO) {
             try {
-                val sysPrompt = "You are a professional text formatter. Rewrite the following text professionally, fix all grammar, punctuation, and capitalization issues, and remove rambling. Output strictly the fixed text."
+                val sysPrompt = "You are a professional text formatter. Your task is to clean up the following text by fixing spelling, grammar, punctuation, and capitalization errors. You MUST keep the text as close to the original wording as possible. Do not completely rewrite it, do not use synonyms to replace the user's words, and do not change the core meaning. Only make the necessary functional cleanups so it sounds professional and grammatically correct. Output strictly the fixed text."
                 val model = com.google.ai.client.generativeai.GenerativeModel("gemini-3.5-flash", geminiApiKey, systemInstruction = com.google.ai.client.generativeai.type.content { text(sysPrompt) })
                 val resp = model.generateContent(text).text?.trim() ?: "No response."
                 withContext(Dispatchers.Main) {
