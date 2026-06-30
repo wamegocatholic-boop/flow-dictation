@@ -32,19 +32,13 @@ except Exception:
 try:
     gemini_client = genai.Client(api_key="AQ.Ab8RN6KTliPSGU-JoFsYSY1MayugE5NFp2MVpNNvQLJg9YiT8w")
     system_instruction = """
-    You are a highly capable AI text formatter for a dictation app. 
-    Your job is to take raw, messy transcribed audio and convert it into clean, grammatically correct prose. 
-    Remove all filler words (ums, ahs, stutters, repeated words). Add appropriate punctuation, capitalization, and structural formatting. 
-    
-    Formatting Rules:
-    1. If the user explicitly says 'comma', 'period', 'exclamation point', 'question mark', 'slash mark', 'new paragraph', or 'open quote'/'close quote', insert the correct punctuation mark or formatting instead of the word.
-    2. Add paragraph breaks naturally based on the flow of the sentences to improve readability, even if not explicitly commanded.
-    3. If the user dictates a list, format it using standard bullet points or numbered lists where appropriate to ensure a professional layout.
-    
-    Self-Correction Rules:
-    If the user says "scratch that", "no wait", "actually", or audibly corrects themselves mid-sentence (e.g., "Schedule a meeting for 6 PM. Scratch that, make it 7 PM"), you MUST intelligently apply the correction, remove the mistaken phrase, and output ONLY the final intended meaning. Do not include the correction keywords in the final output.
-
-    CRITICAL INSTRUCTION: YOU MUST ONLY OUTPUT THE FINAL FORMATTED TEXT. NEVER output the original raw text. NEVER include prefaces or explanations. JUST the polished text.
+    You are a transcription formatting engine. Your ONLY job is to accurately format the dictated text while staying strictly true to the original words. You MUST:
+    1. Fix punctuation and capitalization.
+    2. Apply natural paragraph breaks for long dictations, but avoid double spacing every sentence.
+    3. Insert bullet points ONLY if the user explicitly dictates a list or there is a definitive need; DO NOT turn regular statements into a summarized outline.
+    4. If the user dictates a question, format it as a question and output it. NEVER attempt to answer the question. NEVER say 'I cannot help with that' or converse with the user. Treat all input purely as raw text to format.
+    5. Self-Correction Rules: If the user says 'scratch that', 'no wait', 'actually', or audibly corrects themselves mid-sentence, apply the correction, remove the mistaken phrase, and output ONLY the final intended meaning without the keywords. DO NOT summarize or rewrite the main content.
+    Output strictly the formatted text.
     """
 except Exception:
     gemini_client = None
@@ -120,6 +114,11 @@ class FlowDictationUI(QWidget):
                 border-radius: 3px;
             }
         """)
+        try:
+            hwnd = int(self.winId())
+            ctypes.windll.user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002)
+        except Exception:
+            pass
         
         self.pulse_up = False
         if not hasattr(self, 'pulse_timer'):

@@ -66,6 +66,8 @@ class FlowDictationIME : InputMethodService() {
     
     private lateinit var mainVisualizer: AudioVisualizerView
     private lateinit var spacebarVisualizer: AudioVisualizerView
+    private var btnOmni: TextView? = null
+    private var activeDictationSource = "main" // "main", "spacebar", "omni"
     
     private var isRecording = false
     private var isOmniMode = false
@@ -205,7 +207,10 @@ class FlowDictationIME : InputMethodService() {
             }
             
             setOnClickListener {
-                if (ContextCompat.checkSelfPermission(this@FlowDictationIME, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) toggleDictation()
+                if (ContextCompat.checkSelfPermission(this@FlowDictationIME, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    activeDictationSource = "main"
+                    toggleDictation()
+                }
             }
         }
         toolbarContainer.addView(dictationButtonContainer)
@@ -220,7 +225,17 @@ class FlowDictationIME : InputMethodService() {
         
         val btnPaste = createToolbarButton("📋 Paste", "#1E1E1E", "#AAAAAA", weight = 1f) {
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.primaryClip?.getItemAt(0)?.text?.let { currentInputConnection?.commitText(it, 1) }
+            val clip = clipboard.primaryClip
+            if (clip != null && clip.itemCount > 0) {
+                val item = clip.getItemAt(0)
+                if (item.uri != null && contentResolver.getType(item.uri)?.startsWith("image/") == true) {
+                    val description = android.content.ClipDescription("Clipboard Image", arrayOf("image/*", "image/jpeg", "image/png"))
+                    val contentInfo = android.view.inputmethod.InputContentInfo(item.uri, description)
+                    val success = currentInputConnection?.commitContent(contentInfo, android.view.inputmethod.InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION, null)
+                    if (success == true) return@createToolbarButton
+                }
+                item.text?.let { currentInputConnection?.commitText(it, 1) }
+            }
         }
         val btnSelectAll = createToolbarButton("🎯 Select", "#1E1E1E", "#FFFF55", weight = 1f) {
             val ic = currentInputConnection
@@ -237,17 +252,19 @@ class FlowDictationIME : InputMethodService() {
         
         val btnGoogle = createToolbarButton("🔍 Google", "#1E1E1E", "#AA55FF", weight = 1f) {
             isGoogleSearchMode = true
+            activeDictationSource = "main"
             toggleDictation()
         }
-        val btnOmni = createToolbarButton("🪄 Omni", "#1E1E1E", "#55FFAA", weight = 1f) {
+        btnOmni = createToolbarButton("🪄 Omni", "#1E1E1E", "#55FFAA", weight = 1f) {
             isOmniMode = true
+            activeDictationSource = "omni"
             toggleDictation()
         }
         val btnCalc = createToolbarButton("🧮 Calc", "#1E1E1E", "#FFAA55", weight = 1f) { toggleCalculatorMode() }
         val btnRewrite = createToolbarButton("✨ Fix", "#1E1E1E", "#FF55AA", weight = 1f) { rewriteText() }
         
         toolbarRow2.addView(btnGoogle)
-        toolbarRow2.addView(btnOmni)
+        toolbarRow2.addView(btnOmni!!)
         toolbarRow2.addView(btnCalc)
         toolbarRow2.addView(btnRewrite)
 
@@ -331,7 +348,7 @@ class FlowDictationIME : InputMethodService() {
         container.addView(r2)
 
         val r3 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); weightSum = 10f }
-        r3.addView(createKeyButton("⇧", isSpecial = true, weight = 1.5f, subscript = "😲", longPressAction = { currentInputConnection?.commitText("😲", 1) }) {
+        r3.addView(createKeyButton("⇧", isSpecial = true, weight = 1.5f, subscript = "😳", longPressAction = { currentInputConnection?.commitText("😳", 1) }) {
             isShifted = !isShifted; updateShiftState()
         })
         val zrow = listOf("z","x","c","v","b","n","m")
@@ -358,7 +375,14 @@ class FlowDictationIME : InputMethodService() {
         bottomRow.addView(spacebarButton)
         
         bottomRow.addView(createKeyButton(".", isSpecial = true, weight = 1f, subscript = "🤷‍♂️", longPressAction = { currentInputConnection?.commitText("🤷‍♂️", 1) }) { currentInputConnection?.commitText(".", 1) })
-        bottomRow.addView(createKeyButton("⏎", isSpecial = true, weight = 1.5f, bgColor = "#4A90E2", textColor = "#FFFFFF") {
+        var isFlashlightOn = false
+        bottomRow.addView(createKeyButton("⏎", isSpecial = true, weight = 1.5f, subscript = "🔦", bgColor = "#4A90E2", textColor = "#FFFFFF", longPressAction = {
+            try {
+                val cameraManager = getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+                isFlashlightOn = !isFlashlightOn
+                cameraManager.setTorchMode(cameraManager.cameraIdList[0], isFlashlightOn)
+            } catch (e: Exception) {}
+        }) {
             val action = currentInputEditorInfo.imeOptions and android.view.inputmethod.EditorInfo.IME_MASK_ACTION
             if (action == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH || action == android.view.inputmethod.EditorInfo.IME_ACTION_GO) {
                 currentInputConnection?.performEditorAction(action)
@@ -644,6 +668,7 @@ class FlowDictationIME : InputMethodService() {
             var longPressRunnable = Runnable {
                 isSpacebarRecording = true
                 isOmniMode = false
+                activeDictationSource = "spacebar"
                 if (!isRecording) toggleDictation()
             }
             
@@ -690,19 +715,22 @@ class FlowDictationIME : InputMethodService() {
     private fun updateAllDictationUI() {
         val density = resources.displayMetrics.density
         if (isRecording) {
-            val bgColor = if (isOmniMode || isGoogleSearchMode) "#55FFAA" else "#2A2A2A"
-            val visColor = if (isOmniMode || isGoogleSearchMode) Color.parseColor("#000000") else Color.WHITE
+            val bgColor = if (isGoogleSearchMode) "#55FFAA" else "#2A2A2A"
+            val visColor = if (isGoogleSearchMode) Color.parseColor("#000000") else Color.WHITE
             
-            dictationButtonContainer.background = GradientDrawable().apply { setColor(Color.parseColor(bgColor)); cornerRadius = 12f * density }
-            mainVisualizer.isRecording = true
+            dictationButtonContainer.background = GradientDrawable().apply { setColor(Color.parseColor(if (activeDictationSource == "main" && !isOmniMode) bgColor else "#2A2A2A")); cornerRadius = 12f * density }
+            mainVisualizer.isRecording = (activeDictationSource == "main" && !isOmniMode)
             mainVisualizer.activeColor = visColor
             mainVisualizer.invalidate()
             
-            spacebarButton.background = GradientDrawable().apply { setColor(Color.parseColor(bgColor)); cornerRadius = 6f * density }
-            spacebarVisualizer.isRecording = true
+            spacebarButton.background = GradientDrawable().apply { setColor(Color.parseColor(if (activeDictationSource == "spacebar" && !isOmniMode) bgColor else "#404040")); cornerRadius = 6f * density }
+            spacebarVisualizer.isRecording = (activeDictationSource == "spacebar" && !isOmniMode)
             spacebarVisualizer.activeColor = visColor
-            spacebarVisualizer.alpha = 0.5f
+            spacebarVisualizer.alpha = if (activeDictationSource == "spacebar" && !isOmniMode) 0.5f else 0.2f
             spacebarVisualizer.invalidate()
+
+            btnOmni?.background = GradientDrawable().apply { setColor(Color.parseColor(if (isOmniMode) "#55FFAA" else "#1E1E1E")); cornerRadius = 12f * density }
+            btnOmni?.setTextColor(Color.parseColor(if (isOmniMode) "#000000" else "#55FFAA"))
         } else {
             dictationButtonContainer.background = GradientDrawable().apply { setColor(Color.parseColor("#2A2A2A")); cornerRadius = 12f * density }
             mainVisualizer.isRecording = false
@@ -712,6 +740,10 @@ class FlowDictationIME : InputMethodService() {
             spacebarVisualizer.isRecording = false
             spacebarVisualizer.alpha = 0.2f
             spacebarVisualizer.invalidate()
+
+            btnOmni?.background = GradientDrawable().apply { setColor(Color.parseColor("#1E1E1E")); cornerRadius = 12f * density }
+            btnOmni?.setTextColor(Color.parseColor("#55FFAA"))
+            btnOmni?.alpha = 1.0f
         }
     }
 
@@ -737,15 +769,16 @@ class FlowDictationIME : InputMethodService() {
                     val rms = Math.sqrt(sum / (read / 2.0)).toFloat()
                     val normalizedAmp = Math.min(1f, rms / 2500f) // Boosted sensitivity for better animation
                     
-                    for (i in 0 until 6) {
-                        mainVisualizer.amplitudes[i] = mainVisualizer.amplitudes[i+1]
-                    }
-                    mainVisualizer.amplitudes[6] = normalizedAmp
-                    
-                    mainVisualizer.post { mainVisualizer.invalidate() }
-                    spacebarVisualizer.post { 
-                        System.arraycopy(mainVisualizer.amplitudes, 0, spacebarVisualizer.amplitudes, 0, 7)
-                        spacebarVisualizer.invalidate() 
+                    if (activeDictationSource == "spacebar") {
+                        for (i in 0 until 6) { spacebarVisualizer.amplitudes[i] = spacebarVisualizer.amplitudes[i+1] }
+                        spacebarVisualizer.amplitudes[6] = normalizedAmp
+                        spacebarVisualizer.post { spacebarVisualizer.invalidate() }
+                    } else if (activeDictationSource == "main") {
+                        for (i in 0 until 6) { mainVisualizer.amplitudes[i] = mainVisualizer.amplitudes[i+1] }
+                        mainVisualizer.amplitudes[6] = normalizedAmp
+                        mainVisualizer.post { mainVisualizer.invalidate() }
+                    } else if (activeDictationSource == "omni") {
+                        btnOmni?.post { btnOmni?.alpha = 0.6f + (normalizedAmp * 0.4f) }
                     }
                 }
             }
@@ -830,7 +863,7 @@ class FlowDictationIME : InputMethodService() {
             val client = OkHttpClient()
             val requestBody = MultipartBody.Builder().setType(MultipartBody.FORM)
                 .addFormDataPart("file", "audio.wav", wavData.toRequestBody("audio/wav".toMediaType()))
-                .addFormDataPart("model", "whisper-large-v3")
+                .addFormDataPart("model", if (activeDictationSource == "spacebar" || activeDictationSource == "omni") "whisper-large-v3-turbo" else "whisper-large-v3")
                 .build()
             val request = Request.Builder()
                 .url("https://api.groq.com/openai/v1/audio/transcriptions")
@@ -880,7 +913,7 @@ class FlowDictationIME : InputMethodService() {
                 val scale = Math.min(maxDim / originalBitmap.width, maxDim / originalBitmap.height)
                 val bitmap = if (scale < 1f) android.graphics.Bitmap.createScaledBitmap(originalBitmap, (originalBitmap.width * scale).toInt(), (originalBitmap.height * scale).toInt(), true) else originalBitmap
                 
-                val model = GenerativeModel("gemini-3.5-flash", geminiApiKey, systemInstruction = content { text("Analyze this image and extract the model number, serial number, make, and build year. If and only if it is an AC unit, include the tonnage. Output ONLY the raw values separated by newlines. Do not use any markdown (no asterisks or bold text) and do not include any introductory sentences.") })
+                val model = GenerativeModel("gemini-3.5-flash", geminiApiKey, systemInstruction = content { text("Analyze this image and extract the model number, serial number, make, and build year. If and only if it is an AC unit, include the tonnage. Output the format:\nMake: [make]\nModel Number: [model]\nSerial Number: [serial]\nBuild Year: [year]\nDo not use any markdown (no asterisks or bold text).") })
                 val resp = model.generateContent(content { image(bitmap) }).text ?: ""
                 currentInputConnection?.commitText(resp, 1)
             } catch (e: Exception) {}
