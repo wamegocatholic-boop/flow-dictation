@@ -76,8 +76,8 @@ class FlowDictationIME : InputMethodService() {
     private val serviceJob = Job()
     private val coroutineScope = CoroutineScope(Dispatchers.Main + serviceJob)
 
-    private val groqApiKey = "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"
-    private val geminiApiKey = "AQ.Ab8RN6KTliPSGU-JoFsYSY1MayugE5NFp2MVpNNvQLJg9YiT8w"
+    private val groqApiKey = ""
+    private val geminiApiKey = ""
     
     private val keyButtons = mutableListOf<Button>()
 
