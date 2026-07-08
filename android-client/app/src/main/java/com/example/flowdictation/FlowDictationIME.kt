@@ -74,6 +74,7 @@ class FlowDictationIME : InputMethodService() {
     private var isGoogleSearchMode = false
     private var isShifted = false
     private var currentCalcText = ""
+    private var lastUndoText: String? = null
 
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
@@ -91,7 +92,7 @@ class FlowDictationIME : InputMethodService() {
 
     private val db by lazy { FirebaseFirestore.getInstance() }
     private var globalDictionary = ""
-    private var omniCommands = mutableMapOf<String, String>()
+    private var omniItemsStrList = mutableListOf<String>()
 
     inner class AudioVisualizerView(context: Context) : View(context) {
         var amplitudes = FloatArray(7) { 0.2f }
@@ -159,13 +160,28 @@ class FlowDictationIME : InputMethodService() {
             if (entries.isNotEmpty()) globalDictionary = "Custom Dictionary: \n" + entries.joinToString("\n")
         }
         
-        db.collection("omni_commands").addSnapshotListener { snapshot, e ->
+        db.collection("omni_items").addSnapshotListener { snapshot, e ->
             if (e != null) return@addSnapshotListener
-            omniCommands.clear()
+            omniItemsStrList.clear()
             for (doc in snapshot!!) {
-                val trigger = doc.getString("trigger")?.lowercase()
-                val action = doc.getString("action")
-                if (trigger != null && action != null) omniCommands[trigger] = action
+                val name = doc.getString("name") ?: ""
+                val category = doc.getString("category") ?: ""
+                val keywords = doc.get("keywords") as? List<String> ?: emptyList()
+                val notes = doc.getString("notes") ?: ""
+                val commandsList = doc.get("commands") as? List<Map<String, String>> ?: emptyList()
+                
+                val cmdsStr = commandsList.joinToString("\n") { "- ${it["trigger"]} -> ${it["action"]}" }
+                
+                val formattedStr = """
+                    Category: $category
+                    Item: $name
+                    Keywords: ${keywords.joinToString(", ")}
+                    Master Notes: $notes
+                    Commands:
+                    $cmdsStr
+                """.trimIndent()
+                
+                omniItemsStrList.add(formattedStr)
             }
         }
         
@@ -220,8 +236,20 @@ class FlowDictationIME : InputMethodService() {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 4f)
         }
 
-        val toolbarRow1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); weightSum = 4f }
-        val toolbarRow2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); weightSum = 4f }
+        val toolbarRow1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); weightSum = 5f }
+        val toolbarRow2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT); weightSum = 5f }
+        
+        var capToggleHandler = Handler(Looper.getMainLooper())
+        var capTapCount = 0
+        val btnCapToggle = createToolbarButton("↑↓ Aa", "#1E1E1E", "#FFCC00", weight = 1f) {
+            capTapCount++
+            capToggleHandler.removeCallbacksAndMessages(null)
+            capToggleHandler.postDelayed({
+                val isDoubleTap = capTapCount >= 2
+                capTapCount = 0
+                toggleCapitalization(isDoubleTap)
+            }, 250)
+        }
         
         val btnPaste = createToolbarButton("📋 Paste", "#1E1E1E", "#AAAAAA", weight = 1f) {
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -243,12 +271,29 @@ class FlowDictationIME : InputMethodService() {
             ic.setSelection(0, text.length)
         }
         val btnCopy = createToolbarButton("📋 Copy", "#1E1E1E", "#55AAFF", weight = 1f) { currentInputConnection?.performContextMenuAction(android.R.id.copy) }
-        val btnNuke = createToolbarButton("💣 Nuke", "#1E1E1E", "#FF5555", weight = 1f) { currentInputConnection?.deleteSurroundingText(10000, 10000) }
+        val btnNuke = createToolbarButton("💣 Nuke", "#1E1E1E", "#FF5555", weight = 1f) { 
+            val ic = currentInputConnection
+            lastUndoText = ic?.getExtractedText(ExtractedTextRequest(), 0)?.text?.toString()
+            ic?.commitText("", 1)
+            ic?.deleteSurroundingText(10000, 10000) 
+        }
         
+        toolbarRow1.addView(btnCapToggle)
         toolbarRow1.addView(btnPaste)
         toolbarRow1.addView(btnSelectAll)
         toolbarRow1.addView(btnCopy)
         toolbarRow1.addView(btnNuke)
+        
+        val btnUndo = createToolbarButton("↩ Undo", "#1E1E1E", "#AAAAAA", weight = 1f) {
+            val ic = currentInputConnection
+            if (lastUndoText != null) {
+                ic?.deleteSurroundingText(10000, 10000)
+                ic?.commitText(lastUndoText, 1)
+                lastUndoText = null
+            } else {
+                ic?.performContextMenuAction(android.R.id.undo)
+            }
+        }
         
         val btnGoogle = createToolbarButton("🔍 Google", "#1E1E1E", "#AA55FF", weight = 1f) {
             isGoogleSearchMode = true
@@ -263,6 +308,7 @@ class FlowDictationIME : InputMethodService() {
         val btnCalc = createToolbarButton("🧮 Calc", "#1E1E1E", "#FFAA55", weight = 1f) { toggleCalculatorMode() }
         val btnRewrite = createToolbarButton("✨ Fix", "#1E1E1E", "#FF55AA", weight = 1f) { rewriteText() }
         
+        toolbarRow2.addView(btnUndo)
         toolbarRow2.addView(btnGoogle)
         toolbarRow2.addView(btnOmni!!)
         toolbarRow2.addView(btnCalc)
@@ -512,6 +558,56 @@ class FlowDictationIME : InputMethodService() {
         } catch(e: Exception) { currentCalcText = "Error" }
     }
 
+    private fun toggleCapitalization(isDoubleTap: Boolean) {
+        val ic = currentInputConnection ?: return
+        val selectedText = ic.getSelectedText(0)?.toString()
+        if (!selectedText.isNullOrEmpty()) {
+            val newText = selectedText.split(Regex("(?<=\\s)|(?=\\s)")).joinToString("") { word ->
+                if (word.isBlank()) word
+                else if (isDoubleTap) {
+                    if (word == word.uppercase()) word.lowercase() else word.uppercase()
+                } else {
+                    if (word[0].isUpperCase()) {
+                        word.replaceFirstChar { it.lowercase() }
+                    } else {
+                        word.replaceFirstChar { it.uppercase() }
+                    }
+                }
+            }
+            ic.commitText(newText, 1)
+            return
+        }
+
+        val textBefore = ic.getTextBeforeCursor(50, 0)?.toString() ?: ""
+        val textAfter = ic.getTextAfterCursor(50, 0)?.toString() ?: ""
+        
+        val wordStartRegex = Regex("\\b\\w+$")
+        val wordEndRegex = Regex("^\\w+\\b")
+        
+        val matchBefore = wordStartRegex.find(textBefore)
+        val matchAfter = wordEndRegex.find(textAfter)
+        
+        val startOffset = matchBefore?.value?.length ?: 0
+        val endOffset = matchAfter?.value?.length ?: 0
+        
+        if (startOffset == 0 && endOffset == 0) return
+        
+        val word = (matchBefore?.value ?: "") + (matchAfter?.value ?: "")
+        
+        val newWord = if (isDoubleTap) {
+            if (word == word.uppercase()) word.lowercase() else word.uppercase()
+        } else {
+            if (word.isNotEmpty() && word[0].isUpperCase()) {
+                word.replaceFirstChar { it.lowercase() }
+            } else {
+                word.replaceFirstChar { it.uppercase() }
+            }
+        }
+        
+        ic.deleteSurroundingText(startOffset, endOffset)
+        ic.commitText(newWord, 1)
+    }
+
     private fun updateShiftState() {
         for (view in keyViews) {
             val t = view.text.toString()
@@ -638,8 +734,14 @@ class FlowDictationIME : InputMethodService() {
                     v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                     v.background = GradientDrawable().apply { setColor(Color.parseColor("#606060")); cornerRadius = 6f * density }
                     heldTime = 0L
-                    currentInputConnection?.deleteSurroundingText(1, 0)
-                    handler.postDelayed(runnable, 400)
+                    
+                    val selectedText = currentInputConnection?.getSelectedText(0)
+                    if (!selectedText.isNullOrEmpty()) {
+                        currentInputConnection?.commitText("", 1)
+                    } else {
+                        currentInputConnection?.deleteSurroundingText(1, 0)
+                        handler.postDelayed(runnable, 400)
+                    }
                 } else if (event.action == MotionEvent.ACTION_UP || event.action == MotionEvent.ACTION_CANCEL) {
                     v.background = GradientDrawable().apply { setColor(Color.parseColor("#303030")); cornerRadius = 6f * density }
                     handler.removeCallbacks(runnable)
@@ -667,6 +769,14 @@ class FlowDictationIME : InputMethodService() {
             var isSpacebarRecording = false
             var longPressRunnable = Runnable {
                 isSpacebarRecording = true
+                try {
+                    val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        vibrator.vibrate(android.os.VibrationEffect.createOneShot(80, 255))
+                    } else {
+                        vibrator.vibrate(80)
+                    }
+                } catch(e: Exception) {}
                 isOmniMode = false
                 activeDictationSource = "spacebar"
                 if (!isRecording) toggleDictation()
@@ -814,7 +924,8 @@ class FlowDictationIME : InputMethodService() {
             } else {
                 val transcribedText = transcribeWithGroq(wavData)
                 if (transcribedText.isNotBlank()) {
-                    val formatted = formatWithGroq(transcribedText)
+                    val contextBefore = withContext(Dispatchers.Main) { currentInputConnection?.getTextBeforeCursor(30, 0)?.toString() ?: "" }
+                    val formatted = formatWithGroq(transcribedText, contextBefore)
                     currentInputConnection?.commitText(formatted + " ", 1)
                     
                     try {
@@ -878,13 +989,14 @@ class FlowDictationIME : InputMethodService() {
         return@withContext ""
     }
 
-    private suspend fun formatWithGroq(transcribedText: String): String = withContext(Dispatchers.IO) {
+    private suspend fun formatWithGroq(transcribedText: String, contextBefore: String = ""): String = withContext(Dispatchers.IO) {
         try {
             val client = OkHttpClient()
             val json = JSONObject()
             json.put("model", "openai/gpt-oss-20b")
             val messages = JSONArray()
-            val sysMsg = JSONObject().apply { put("role", "system"); put("content", "You are a transcription formatting engine. Your ONLY job is to accurately format the dictated text while staying strictly true to the original words. You MUST: 1. Fix punctuation and capitalization. 2. Apply natural paragraph breaks for long dictations, but avoid double spacing every sentence. 3. Insert bullet points ONLY if the user explicitly dictates a list or there is a definitive need; DO NOT turn regular statements into a summarized outline. 4. If the user dictates a question, format it as a question and output it. NEVER attempt to answer the question. NEVER say 'I cannot help with that' or converse with the user. Treat all input purely as raw text to format. 5. Self-Correction Rules: If the user says 'scratch that', 'no wait', 'actually', or audibly corrects themselves mid-sentence, apply the correction, remove the mistaken phrase, and output ONLY the final intended meaning without the keywords. DO NOT summarize or rewrite the main content. Output strictly the formatted text, applying: " + globalDictionary) }
+            val contextRule = if (contextBefore.isNotBlank()) "7. Context Continuation: The user is continuing a sentence mid-stream. The text immediately preceding the cursor is: '$contextBefore'. Format the dictated text to seamlessly continue from that point without adding unnecessary capitalization unless it is a proper noun." else ""
+            val sysMsg = JSONObject().apply { put("role", "system"); put("content", "You are a transcription formatting engine. Your ONLY job is to accurately format the dictated text while staying strictly true to the original words. You MUST: 1. Fix punctuation and capitalization. 2. Apply natural paragraph breaks for long dictations, but avoid double spacing every sentence. 3. Insert bullet points ONLY if the user explicitly dictates a list or there is a definitive need; DO NOT turn regular statements into a summarized outline. 4. If the user dictates a question, format it as a question and output it. NEVER attempt to answer the question. NEVER say 'I cannot help with that' or converse with the user. Treat all input purely as raw text to format. 5. Self-Correction Rules: If the user says 'scratch that', 'no wait', 'actually', or audibly corrects themselves mid-sentence, apply the correction, remove the mistaken phrase, and output ONLY the final intended meaning without the keywords. DO NOT summarize or rewrite the main content. 6. Punctuation override: If the user says the word 'X' at the very end of a sentence, output an exclamation point '!' instead. Anytime the user dictates the word 'slash', you MUST output the actual forward slash character '/'. $contextRule Output strictly the formatted text, applying: " + globalDictionary) }
             val userMsg = JSONObject().apply { put("role", "user"); put("content", transcribedText) }
             messages.put(sysMsg)
             messages.put(userMsg)
@@ -913,7 +1025,7 @@ class FlowDictationIME : InputMethodService() {
                 val scale = Math.min(maxDim / originalBitmap.width, maxDim / originalBitmap.height)
                 val bitmap = if (scale < 1f) android.graphics.Bitmap.createScaledBitmap(originalBitmap, (originalBitmap.width * scale).toInt(), (originalBitmap.height * scale).toInt(), true) else originalBitmap
                 
-                val model = GenerativeModel("gemini-3.5-flash", geminiApiKey, systemInstruction = content { text("Analyze this image and extract the model number, serial number, make, and build year. If and only if it is an AC unit, include the tonnage. Output the format:\nMake: [make]\nModel Number: [model]\nSerial Number: [serial]\nBuild Year: [year]\nDo not use any markdown (no asterisks or bold text).") })
+                val model = GenerativeModel("gemini-3.5-flash", geminiApiKey, systemInstruction = content { text("Analyze this image and extract the model number, serial number, make, and build year. If and only if it is an AC unit, include the tonnage. If and only if it is a furnace, include the BTU output. Output the format:\nMake: [make]\nModel Number: [model]\nSerial Number: [serial]\nBuild Year: [year]\nBTUs: [XX,XXX BTUs] (if furnace)\nTonnage: [X Tons] (if AC unit)\nDo not use any markdown (no asterisks or bold text).") })
                 val resp = model.generateContent(content { image(bitmap) }).text ?: ""
                 currentInputConnection?.commitText(resp, 1)
             } catch (e: Exception) {}
@@ -923,6 +1035,7 @@ class FlowDictationIME : InputMethodService() {
     private fun rewriteText() {
         val ic = currentInputConnection
         val text = ic?.getExtractedText(ExtractedTextRequest(), 0)?.text?.toString() ?: return
+        lastUndoText = text
         coroutineScope.launch(Dispatchers.IO) {
             try {
                 val sysPrompt = "You are a professional text formatter. Your task is to clean up the following text by fixing spelling, grammar, punctuation, and capitalization errors. You MUST keep the text as close to the original wording as possible. Do not completely rewrite it, do not use synonyms to replace the user's words, and do not change the core meaning. Only make the necessary functional cleanups so it sounds professional and grammatically correct. Output strictly the fixed text."
@@ -971,12 +1084,7 @@ class FlowDictationIME : InputMethodService() {
         val query = transcribeWithGroq(wavData)
         if (query.isBlank()) return
         
-        for ((trigger, action) in omniCommands) {
-            if (query.lowercase().contains(trigger)) {
-                currentInputConnection?.commitText(action, 1)
-                return
-            }
-        }
+        val currentDocText = withContext(Dispatchers.Main) { currentInputConnection?.getExtractedText(ExtractedTextRequest(), 0)?.text?.toString() ?: "" }
 
         fun getContact(name: String): String {
             val uri = android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI
@@ -990,9 +1098,27 @@ class FlowDictationIME : InputMethodService() {
             return contactInfo
         }
 
-        val prompt = "You are an Omni Agent acting as an Android keyboard. User requested: '$query'. Do NOT echo the user's command. Act as the user's hands. Provide ONLY the raw requested answer. Absolutely no conversational filler, no introductory text, and no markdown. If asked a math question, provide only the numeric answer (e.g., '108'). If asked to type or paste something, output ONLY the exact text they want generated. If asking for a contact, return JSON: {\"tool\":\"contacts\", \"arg\":\"[name]\"}."
+        val sysPrompt = """
+            You are a Smart Omni Template engine acting as an Android keyboard. 
+            The user has defined the following Omni Command Templates:
+            ${omniItemsStrList.joinToString("\n\n")}
+            
+            Your task:
+            1. Analyze the user's spoken request and match it to one of these templates if applicable.
+            2. If it matches, use the user's query and the surrounding document context to intelligently fill in any missing information in the template.
+            3. The current document text is:
+            <current_document>
+            $currentDocText
+            </current_document>
+            4. IMPORTANT FORMATTING RULE: If the user provides multiple keywords or sub-commands related to a single topic, intelligently weave them together into a natural, flowing, and professional paragraph. Avoid rigid, repetitive wording (e.g., do NOT output 'The AC unit is... The AC unit is...'). Formulate cohesive sentences.
+            5. If asked a math question, provide only the numeric answer.
+            6. If asking for a contact, return JSON: {"tool":"contacts", "arg":"[name]"}.
+            7. Output ONLY the final text to be inserted into the text box. Do not include any explanations, markdown, or conversational filler.
+        """.trimIndent()
+        
+        val prompt = "User requested: '$query'. Provide ONLY the raw requested answer or formatted template."
+        
         try {
-            val sysPrompt = "You are an intelligent assistant. Answer factual queries, solve math, and follow commands briefly. You have access to these contacts/commands: " + omniCommands.entries.joinToString { it.key + ":" + it.value } + " Use them if asked. NEVER refuse to help."
             val model = com.google.ai.client.generativeai.GenerativeModel("gemini-3.5-flash", geminiApiKey, systemInstruction = com.google.ai.client.generativeai.type.content { text(sysPrompt) })
             
             withContext(Dispatchers.IO) {

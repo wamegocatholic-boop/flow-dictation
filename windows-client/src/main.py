@@ -47,6 +47,7 @@ try:
     3. Insert bullet points ONLY if the user explicitly dictates a list or there is a definitive need; DO NOT turn regular statements into a summarized outline.
     4. If the user dictates a question, format it as a question and output it. NEVER attempt to answer the question. NEVER say 'I cannot help with that' or converse with the user. Treat all input purely as raw text to format.
     5. Self-Correction Rules: If the user says 'scratch that', 'no wait', 'actually', or audibly corrects themselves mid-sentence, apply the correction, remove the mistaken phrase, and output ONLY the final intended meaning without the keywords. DO NOT summarize or rewrite the main content.
+    6. Punctuation override: If the user says the word "X" at the very end of a sentence, output an exclamation point "!" instead. Anytime the user dictates the word "slash", you MUST output the actual forward slash character "/".
     Output strictly the formatted text.
     """
 except Exception:
