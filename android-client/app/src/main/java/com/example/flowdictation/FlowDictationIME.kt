@@ -75,6 +75,7 @@ class FlowDictationIME : InputMethodService() {
     private var isShifted = false
     private var currentCalcText = ""
     private var lastUndoText: String? = null
+    private var lastUndoTime = 0L
 
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
@@ -284,15 +285,20 @@ class FlowDictationIME : InputMethodService() {
         toolbarRow1.addView(btnCopy)
         toolbarRow1.addView(btnNuke)
         
-        val btnUndo = createToolbarButton("↩ Undo", "#1E1E1E", "#AAAAAA", weight = 1f) {
+        val btnUndo = createToolbarButton("↩ Undo", "#1E1E1E", "#AAAAAA", weight = 1f, longPressAction = {
+            if (System.currentTimeMillis() - lastUndoTime < 60000) {
+                currentInputConnection?.performContextMenuAction(android.R.id.redo)
+            }
+        }) {
             val ic = currentInputConnection
             if (lastUndoText != null) {
                 ic?.deleteSurroundingText(10000, 10000)
-                ic?.commitText(lastUndoText, 1)
+                ic?.commitText(lastUndoText!!, 1)
                 lastUndoText = null
             } else {
                 ic?.performContextMenuAction(android.R.id.undo)
             }
+            lastUndoTime = System.currentTimeMillis()
         }
         
         val btnGoogle = createToolbarButton("🔍 Google", "#1E1E1E", "#AA55FF", weight = 1f) {
@@ -639,7 +645,7 @@ class FlowDictationIME : InputMethodService() {
         }
     }
 
-    private fun createToolbarButton(textStr: String, bgColor: String, textColor: String, weight: Float, onClick: () -> Unit): TextView {
+    private fun createToolbarButton(textStr: String, bgColor: String, textColor: String, weight: Float, longPressAction: (() -> Unit)? = null, onClick: () -> Unit): TextView {
         val density = resources.displayMetrics.density
         return TextView(this).apply {
             text = textStr; setTextColor(Color.parseColor(textColor)); textSize = 12f; gravity = Gravity.CENTER
@@ -657,6 +663,9 @@ class FlowDictationIME : InputMethodService() {
                 false
             }
             setOnClickListener { onClick() }
+            if (longPressAction != null) {
+                setOnLongClickListener { longPressAction(); true }
+            }
         }
     }
 
@@ -767,19 +776,42 @@ class FlowDictationIME : InputMethodService() {
             
             var handler = Handler(Looper.getMainLooper())
             var isSpacebarRecording = false
+            
+            var hapticHandler = Handler(Looper.getMainLooper())
+            var hapticRunnable = object : Runnable {
+                override fun run() {
+                    if (isSpacebarRecording) {
+                        try {
+                            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                vibrator.vibrate(android.os.VibrationEffect.createOneShot(50, 100))
+                            } else {
+                                vibrator.vibrate(50)
+                            }
+                        } catch(e: Exception) {}
+                        hapticHandler.postDelayed(this, 1500)
+                    }
+                }
+            }
+
             var longPressRunnable = Runnable {
                 isSpacebarRecording = true
                 try {
                     val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                        vibrator.vibrate(android.os.VibrationEffect.createOneShot(80, 255))
+                        val timings = longArrayOf(0, 50, 100, 50)
+                        val amplitudes = intArrayOf(0, 255, 0, 255)
+                        vibrator.vibrate(android.os.VibrationEffect.createWaveform(timings, amplitudes, -1))
                     } else {
-                        vibrator.vibrate(80)
+                        vibrator.vibrate(longArrayOf(0, 50, 100, 50), -1)
                     }
                 } catch(e: Exception) {}
+                
                 isOmniMode = false
                 activeDictationSource = "spacebar"
                 if (!isRecording) toggleDictation()
+                
+                hapticHandler.postDelayed(hapticRunnable, 1500)
             }
             
             setOnTouchListener { v, event ->
@@ -792,6 +824,7 @@ class FlowDictationIME : InputMethodService() {
                     }
                     MotionEvent.ACTION_UP -> {
                         handler.removeCallbacks(longPressRunnable)
+                        hapticHandler.removeCallbacks(hapticRunnable)
                         v.background = GradientDrawable().apply { setColor(Color.parseColor("#404040")); cornerRadius = 6f * density }
                         if (isSpacebarRecording) {
                             if (isRecording) toggleDictation()
@@ -801,6 +834,7 @@ class FlowDictationIME : InputMethodService() {
                     }
                     MotionEvent.ACTION_CANCEL -> {
                         handler.removeCallbacks(longPressRunnable)
+                        hapticHandler.removeCallbacks(hapticRunnable)
                         v.background = GradientDrawable().apply { setColor(Color.parseColor("#404040")); cornerRadius = 6f * density }
                         if (isSpacebarRecording && isRecording) toggleDictation()
                     }
@@ -924,8 +958,7 @@ class FlowDictationIME : InputMethodService() {
             } else {
                 val transcribedText = transcribeWithGroq(wavData)
                 if (transcribedText.isNotBlank()) {
-                    val contextBefore = withContext(Dispatchers.Main) { currentInputConnection?.getTextBeforeCursor(30, 0)?.toString() ?: "" }
-                    val formatted = formatWithGroq(transcribedText, contextBefore)
+                    val formatted = formatWithGroq(transcribedText)
                     currentInputConnection?.commitText(formatted + " ", 1)
                     
                     try {
@@ -989,14 +1022,13 @@ class FlowDictationIME : InputMethodService() {
         return@withContext ""
     }
 
-    private suspend fun formatWithGroq(transcribedText: String, contextBefore: String = ""): String = withContext(Dispatchers.IO) {
+    private suspend fun formatWithGroq(transcribedText: String): String = withContext(Dispatchers.IO) {
         try {
             val client = OkHttpClient()
             val json = JSONObject()
             json.put("model", "openai/gpt-oss-20b")
             val messages = JSONArray()
-            val contextRule = if (contextBefore.isNotBlank()) "7. Context Continuation: The user is continuing a sentence mid-stream. The text immediately preceding the cursor is: '$contextBefore'. Format the dictated text to seamlessly continue from that point without adding unnecessary capitalization unless it is a proper noun." else ""
-            val sysMsg = JSONObject().apply { put("role", "system"); put("content", "You are a transcription formatting engine. Your ONLY job is to accurately format the dictated text while staying strictly true to the original words. You MUST: 1. Fix punctuation and capitalization. 2. Apply natural paragraph breaks for long dictations, but avoid double spacing every sentence. 3. Insert bullet points ONLY if the user explicitly dictates a list or there is a definitive need; DO NOT turn regular statements into a summarized outline. 4. If the user dictates a question, format it as a question and output it. NEVER attempt to answer the question. NEVER say 'I cannot help with that' or converse with the user. Treat all input purely as raw text to format. 5. Self-Correction Rules: If the user says 'scratch that', 'no wait', 'actually', or audibly corrects themselves mid-sentence, apply the correction, remove the mistaken phrase, and output ONLY the final intended meaning without the keywords. DO NOT summarize or rewrite the main content. 6. Punctuation override: If the user says the word 'X' at the very end of a sentence, output an exclamation point '!' instead. Anytime the user dictates the word 'slash', you MUST output the actual forward slash character '/'. $contextRule Output strictly the formatted text, applying: " + globalDictionary) }
+            val sysMsg = JSONObject().apply { put("role", "system"); put("content", "You are a transcription formatting engine. Your ONLY job is to accurately format the dictated text while staying strictly true to the original words. You MUST: 1. Fix punctuation and capitalization. 2. Apply natural paragraph breaks for long dictations, but avoid double spacing every sentence. 3. Insert bullet points ONLY if the user explicitly dictates a list or there is a definitive need; DO NOT turn regular statements into a summarized outline. 4. If the user dictates a question, format it as a question and output it. NEVER attempt to answer the question. NEVER say 'I cannot help with that' or converse with the user. Treat all input purely as raw text to format. 5. Self-Correction Rules: If the user says 'scratch that', 'no wait', 'actually', or audibly corrects themselves mid-sentence, apply the correction, remove the mistaken phrase, and output ONLY the final intended meaning without the keywords. DO NOT summarize or rewrite the main content. 6. Punctuation override: If the user says the word 'X' at the very end of a sentence, output an exclamation point '!' instead. Anytime the user dictates the word 'slash', you MUST output the actual forward slash character '/'. Output strictly the formatted text, applying: " + globalDictionary) }
             val userMsg = JSONObject().apply { put("role", "user"); put("content", transcribedText) }
             messages.put(sysMsg)
             messages.put(userMsg)
