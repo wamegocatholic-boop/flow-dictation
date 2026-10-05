@@ -1,1 +1,1 @@
-So basically whenever I am manually typing something and the cursor is after a period or in an empty text box, it automatically applies cap locks to the physical keys so I don't have to hit the cap locks button first.
+Thank you.

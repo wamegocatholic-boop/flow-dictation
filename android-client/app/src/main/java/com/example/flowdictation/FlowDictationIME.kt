@@ -148,6 +148,32 @@ class FlowDictationIME : InputMethodService() {
         }
     }
 
+    override fun onUpdateSelection(oldSelStart: Int, oldSelEnd: Int, newSelStart: Int, newSelEnd: Int, candidatesStart: Int, candidatesEnd: Int) {
+        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        
+        val ic = currentInputConnection ?: return
+        if (newSelStart != newSelEnd) return
+        
+        val textBefore = ic.getTextBeforeCursor(3, 0)?.toString() ?: ""
+        var shouldCapitalize = false
+        
+        if (textBefore.isEmpty()) {
+            shouldCapitalize = true
+        } else if (textBefore.endsWith("\n")) {
+            shouldCapitalize = true
+        } else if (textBefore.length >= 2 && textBefore.matches(Regex(".*[.?!]\\s+$"))) {
+            shouldCapitalize = true
+        }
+        
+        if (shouldCapitalize && !isShifted) {
+            isShifted = true
+            updateShiftState()
+        } else if (!shouldCapitalize && isShifted && textBefore.isNotEmpty()) {
+            isShifted = false
+            updateShiftState()
+        }
+    }
+
     override fun onCreateInputView(): View {
         val density = resources.displayMetrics.density
 
@@ -958,7 +984,8 @@ class FlowDictationIME : InputMethodService() {
             } else {
                 val transcribedText = transcribeWithGroq(wavData)
                 if (transcribedText.isNotBlank()) {
-                    val formatted = formatWithGroq(transcribedText)
+                    val isSpacebar = (activeDictationSource == "spacebar")
+                    val formatted = formatWithGroq(transcribedText, isSpacebar)
                     currentInputConnection?.commitText(formatted + " ", 1)
                     
                     try {
@@ -1022,13 +1049,14 @@ class FlowDictationIME : InputMethodService() {
         return@withContext ""
     }
 
-    private suspend fun formatWithGroq(transcribedText: String): String = withContext(Dispatchers.IO) {
+    private suspend fun formatWithGroq(transcribedText: String, isSpacebar: Boolean = false): String = withContext(Dispatchers.IO) {
         try {
             val client = OkHttpClient()
             val json = JSONObject()
             json.put("model", "openai/gpt-oss-20b")
             val messages = JSONArray()
-            val sysMsg = JSONObject().apply { put("role", "system"); put("content", "You are a transcription formatting engine. Your ONLY job is to accurately format the dictated text while staying strictly true to the original words. You MUST: 1. Fix punctuation and capitalization. 2. Apply natural paragraph breaks for long dictations, but avoid double spacing every sentence. 3. Insert bullet points ONLY if the user explicitly dictates a list or there is a definitive need; DO NOT turn regular statements into a summarized outline. 4. If the user dictates a question, format it as a question and output it. NEVER attempt to answer the question. NEVER say 'I cannot help with that' or converse with the user. Treat all input purely as raw text to format. 5. Self-Correction Rules: If the user says 'scratch that', 'no wait', 'actually', or audibly corrects themselves mid-sentence, apply the correction, remove the mistaken phrase, and output ONLY the final intended meaning without the keywords. DO NOT summarize or rewrite the main content. 6. Punctuation override: If the user says the word 'X' at the very end of a sentence, output an exclamation point '!' instead. Anytime the user dictates the word 'slash', you MUST output the actual forward slash character '/'. Output strictly the formatted text, applying: " + globalDictionary) }
+            val spacebarRule = if (isSpacebar) "7. Middle of sentence: Do not capitalize the first word of the transcription unless it is a proper noun. Do not add any punctuation (like a period) to the end of the transcription. This text is being inserted into the middle of an existing sentence. " else ""
+            val sysMsg = JSONObject().apply { put("role", "system"); put("content", "You are a transcription formatting engine. Your ONLY job is to accurately format the dictated text while staying strictly true to the original words. You MUST: 1. Fix punctuation and capitalization. 2. Apply natural paragraph breaks for long dictations, but avoid double spacing every sentence. 3. Insert bullet points ONLY if the user explicitly dictates a list or there is a definitive need; DO NOT turn regular statements into a summarized outline. 4. If the user dictates a question, format it as a question and output it. NEVER attempt to answer the question. NEVER say 'I cannot help with that' or converse with the user. Treat all input purely as raw text to format. 5. Self-Correction Rules: If the user says 'scratch that', 'no wait', 'actually', or audibly corrects themselves mid-sentence, apply the correction, remove the mistaken phrase, and output ONLY the final intended meaning without the keywords. DO NOT summarize or rewrite the main content. 6. Punctuation override: If the user says the word 'X' at the very end of a sentence, output an exclamation point '!' attached directly to the last word without any preceding spaces or punctuation. It must replace any period or comma that would normally go there. Anytime the user dictates the word 'slash', you MUST output the actual forward slash character '/'. $spacebarRule Output strictly the formatted text, applying: " + globalDictionary) }
             val userMsg = JSONObject().apply { put("role", "user"); put("content", transcribedText) }
             messages.put(sysMsg)
             messages.put(userMsg)
@@ -1057,7 +1085,7 @@ class FlowDictationIME : InputMethodService() {
                 val scale = Math.min(maxDim / originalBitmap.width, maxDim / originalBitmap.height)
                 val bitmap = if (scale < 1f) android.graphics.Bitmap.createScaledBitmap(originalBitmap, (originalBitmap.width * scale).toInt(), (originalBitmap.height * scale).toInt(), true) else originalBitmap
                 
-                val model = GenerativeModel("gemini-3.5-flash", geminiApiKey, systemInstruction = content { text("Analyze this image and extract the model number, serial number, make, and build year. If and only if it is an AC unit, include the tonnage. If and only if it is a furnace, include the BTU output. Output the format:\nMake: [make]\nModel Number: [model]\nSerial Number: [serial]\nBuild Year: [year]\nBTUs: [XX,XXX BTUs] (if furnace)\nTonnage: [X Tons] (if AC unit)\nDo not use any markdown (no asterisks or bold text).") })
+                val model = GenerativeModel("gemini-3.6-flash", geminiApiKey, systemInstruction = content { text("Analyze this image and extract the model number, serial number, make, and build year. If and only if it is an AC unit, include the tonnage. If and only if it is a furnace, include the BTU output. Output the format:\nMake: [make]\nModel Number: [model]\nSerial Number: [serial]\nBuild Year: [year]\nBTUs: [XX,XXX BTUs] (if furnace)\nTonnage: [X Tons] (if AC unit)\nDo not use any markdown (no asterisks or bold text).") })
                 val resp = model.generateContent(content { image(bitmap) }).text ?: ""
                 currentInputConnection?.commitText(resp, 1)
             } catch (e: Exception) {}
@@ -1071,7 +1099,7 @@ class FlowDictationIME : InputMethodService() {
         coroutineScope.launch(Dispatchers.IO) {
             try {
                 val sysPrompt = "You are a professional text formatter. Your task is to clean up the following text by fixing spelling, grammar, punctuation, and capitalization errors. You MUST keep the text as close to the original wording as possible. Do not completely rewrite it, do not use synonyms to replace the user's words, and do not change the core meaning. Only make the necessary functional cleanups so it sounds professional and grammatically correct. Output strictly the fixed text."
-                val model = com.google.ai.client.generativeai.GenerativeModel("gemini-3.5-flash", geminiApiKey, systemInstruction = com.google.ai.client.generativeai.type.content { text(sysPrompt) })
+                val model = com.google.ai.client.generativeai.GenerativeModel("gemini-3.6-flash", geminiApiKey, systemInstruction = com.google.ai.client.generativeai.type.content { text(sysPrompt) })
                 val resp = model.generateContent(text).text?.trim() ?: "No response."
                 withContext(Dispatchers.Main) {
                     ic.deleteSurroundingText(10000, 10000)
@@ -1151,7 +1179,7 @@ class FlowDictationIME : InputMethodService() {
         val prompt = "User requested: '$query'. Provide ONLY the raw requested answer or formatted template."
         
         try {
-            val model = com.google.ai.client.generativeai.GenerativeModel("gemini-3.5-flash", geminiApiKey, systemInstruction = com.google.ai.client.generativeai.type.content { text(sysPrompt) })
+            val model = com.google.ai.client.generativeai.GenerativeModel("gemini-3.6-flash", geminiApiKey, systemInstruction = com.google.ai.client.generativeai.type.content { text(sysPrompt) })
             
             withContext(Dispatchers.IO) {
                 val respObj = model.generateContent(prompt)
